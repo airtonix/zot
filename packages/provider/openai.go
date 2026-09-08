@@ -303,7 +303,9 @@ func (c *openaiClient) buildRequest(req Request) (*oaiRequest, error) {
 	textOnly := c.name == "deepseek"
 
 	req.Messages = RepairOrphanedToolResults(req.Messages)
-	for _, msg := range req.Messages {
+	for msgIndex := 0; msgIndex < len(req.Messages); msgIndex++ {
+		msg := req.Messages[msgIndex]
+		addedToolNames := append([]string(nil), msg.AddedToolNames...)
 		switch msg.Role {
 		case RoleUser:
 			content := buildOAIUserContent(msg.Content, textOnly)
@@ -363,23 +365,53 @@ func (c *openaiClient) buildRequest(req Request) (*oaiRequest, error) {
 			}
 			out.Messages = append(out.Messages, am)
 		case RoleTool:
-			// Each ToolResultBlock becomes its own tool message. Preserve
-			// image blocks for vision-capable OpenAI models instead of
-			// flattening the tool output to plain text.
-			for _, b := range msg.Content {
-				if tr, ok := b.(ToolResultBlock); ok {
-					content := buildOAIToolContent(tr.Content, tr.IsError, textOnly)
-					out.Messages = append(out.Messages, oaiMessage{
-						Role:       "tool",
-						ToolCallID: tr.CallID,
-						Content:    content,
-					})
+			// Chat Completions tool messages only carry text. Keep every
+			// tool result paired with its call, then deliver any images in
+			// one user message after the complete batch of tool results.
+			// Strict OpenAI-compatible APIs reject image_url blocks on a
+			// role=tool message.
+			var images []Content
+			groupEnd := msgIndex
+			for groupEnd < len(req.Messages) && req.Messages[groupEnd].Role == RoleTool {
+				toolMessage := req.Messages[groupEnd]
+				if groupEnd > msgIndex {
+					addedToolNames = append(addedToolNames, toolMessage.AddedToolNames...)
 				}
+				for _, b := range toolMessage.Content {
+					if tr, ok := b.(ToolResultBlock); ok {
+						content := buildOAIToolContent(tr.Content, tr.IsError, textOnly)
+						out.Messages = append(out.Messages, oaiMessage{
+							Role:       "tool",
+							ToolCallID: tr.CallID,
+							Content:    content,
+						})
+						if !textOnly {
+							for _, inner := range tr.Content {
+								if image, ok := inner.(ImageBlock); ok {
+									images = append(images, image)
+								}
+							}
+						}
+					}
+				}
+				groupEnd++
 			}
+			// The built-in OpenAI client also persists this image mirror so
+			// Responses-routed models can consume it. Reuse that next message
+			// instead of sending the image twice.
+			hasPersistedMirror := groupEnd < len(req.Messages) && isOpenAIToolImageMirror(req.Messages[groupEnd])
+			if len(images) > 0 && !hasPersistedMirror {
+				content := append([]Content{TextBlock{Text: "Tool output included the following image content:"}}, images...)
+				out.Messages = append(out.Messages, oaiMessage{
+					Role:    "user",
+					Content: buildOAIContentBlocks(content, false),
+				})
+			}
+			msgIndex = groupEnd - 1
 		}
 		if deferredMode {
 			var loaded []oaiTool
-			for _, name := range msg.AddedToolNames {
+			for _, name := range addedToolNames {
 				if t, ok := toolByName[name]; ok && t.Deferred {
 					loaded = append(loaded, makeOAITool(t))
 				}
@@ -468,30 +500,43 @@ func buildOAIUserContent(blocks []Content, textOnly bool) interface{} {
 	return buildOAIContentBlocks(blocks, false)
 }
 
-func buildOAIToolContent(blocks []Content, isError, textOnly bool) interface{} {
+func buildOAIToolContent(blocks []Content, isError, textOnly bool) string {
+	var sb strings.Builder
 	hasImage := false
 	for _, b := range blocks {
-		if _, ok := b.(ImageBlock); ok {
-			hasImage = true
-			break
-		}
-	}
-	if textOnly || !hasImage {
-		var sb strings.Builder
-		for _, b := range blocks {
-			if tb, ok := b.(TextBlock); ok {
-				if sb.Len() > 0 {
-					sb.WriteString("\n")
-				}
-				sb.WriteString(tb.Text)
+		switch v := b.(type) {
+		case TextBlock:
+			if sb.Len() > 0 {
+				sb.WriteString("\n")
 			}
+			sb.WriteString(v.Text)
+		case ImageBlock:
+			hasImage = true
 		}
-		if isError && sb.Len() > 0 {
-			sb.WriteString(" [error]")
-		}
-		return sb.String()
 	}
-	return buildOAIContentBlocks(blocks, isError)
+	if sb.Len() == 0 && hasImage && !textOnly {
+		sb.WriteString("(see attached image)")
+	}
+	if isError && sb.Len() > 0 {
+		sb.WriteString(" [error]")
+	}
+	return sb.String()
+}
+
+func isOpenAIToolImageMirror(msg Message) bool {
+	if msg.Role != RoleUser || len(msg.Content) < 2 {
+		return false
+	}
+	text, ok := msg.Content[0].(TextBlock)
+	if !ok || text.Text != "Tool output included the following image content:" {
+		return false
+	}
+	for _, content := range msg.Content[1:] {
+		if _, ok := content.(ImageBlock); ok {
+			return true
+		}
+	}
+	return false
 }
 
 func buildOAIContentBlocks(blocks []Content, isError bool) []interface{} {
