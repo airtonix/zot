@@ -355,6 +355,21 @@ func TestBashSuccess(t *testing.T) {
 	}
 }
 
+func TestBashExposesChildSessionMarker(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("posix shell only")
+	}
+	tool := &BashTool{CWD: t.TempDir()}
+	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{"command": "printf '%s' \"$ZOT_CHILD_SESSION\""}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := res.Content[0].(provider.TextBlock).Text
+	if !strings.Contains(got, "1") {
+		t.Fatalf("ZOT_CHILD_SESSION = %q, want 1", got)
+	}
+}
+
 func TestBashSyntax(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("bash syntax is not used on Windows")

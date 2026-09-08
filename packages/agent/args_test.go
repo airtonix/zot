@@ -106,6 +106,9 @@ func TestRunSetsAgentEnvironment(t *testing.T) {
 	if got := os.Getenv("ZOT_AGENT"); got != "1" {
 		t.Fatalf("ZOT_AGENT = %q, want %q", got, "1")
 	}
+	if got := os.Getenv("AI_AGENT"); got != "zot" {
+		t.Fatalf("AI_AGENT = %q, want %q", got, "zot")
+	}
 }
 
 func TestHelpOutputStreams(t *testing.T) {

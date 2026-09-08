@@ -208,8 +208,13 @@ func fanoutAgentEvent(mgr *extensions.Manager, ev core.AgentEvent) {
 func Run(rawArgs []string, version string) error {
 	// Mark the process and all child processes as running under zot. This
 	// lets shell tools, extensions, and scripts distinguish zot execution
-	// from an ordinary invocation.
+	// from an ordinary invocation. Clear per-session values because embedded
+	// callers may invoke Run more than once in one process.
+	_ = os.Setenv("AI_AGENT", "zot")
 	_ = os.Setenv("ZOT_AGENT", "1")
+	for _, name := range []string{"ZOT_SESSION_ID", "ZOT_SESSION_FILE", "ZOT_PROVIDER", "ZOT_MODEL", "ZOT_REASONING_LEVEL"} {
+		_ = os.Unsetenv(name)
+	}
 
 	// Apply network configuration before any subcommand can make an HTTP
 	// request. Standard proxy environment variables retain precedence.
@@ -1065,6 +1070,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		sess = newSess
 		currentAg.SetMessages(msgs)
 		bindAgentSession(currentAg, sess)
+		setZotSessionEnvironment(r, sess)
 		startExtensionSession(extMgr, currentAg, r.CWD, "session_switch")
 		if cum, last, uerr := core.SessionUsageDetail(path); uerr == nil {
 			currentAg.SeedCost(cum)
@@ -1472,6 +1478,9 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 			if sess != nil {
 				_ = sess.UpdateModel(providerName, model)
 			}
+			r.Provider = providerName
+			r.Model = model
+			setZotSessionEnvironment(r, sess)
 		},
 	})
 
@@ -1548,6 +1557,7 @@ func agentSessionsRoot(root string, args Args) string {
 // exists, its id is bound onto ag so providers can sticky-route.
 func openOrCreateSession(args Args, r Resolved, ag *core.Agent, version string) (*core.Session, error) {
 	if args.NoSess {
+		setZotSessionEnvironment(r, nil)
 		return nil, nil
 	}
 	// Sweep meta-only files left over from older zot versions (and from
@@ -1605,7 +1615,29 @@ func openOrCreateSession(args Args, r Resolved, ag *core.Agent, version string) 
 		}
 	}
 	bindAgentSession(ag, s)
+	setZotSessionEnvironment(r, s)
 	return s, nil
+}
+
+// setZotSessionEnvironment publishes the non-secret runtime metadata that
+// zot's child processes can use for attribution and diagnostics.
+func setZotSessionEnvironment(r Resolved, sess *core.Session) {
+	values := map[string]string{
+		"ZOT_PROVIDER":        r.Provider,
+		"ZOT_MODEL":           r.Model,
+		"ZOT_REASONING_LEVEL": r.Reasoning,
+	}
+	if sess != nil {
+		values["ZOT_SESSION_ID"] = sess.ID
+		values["ZOT_SESSION_FILE"] = sess.Path
+	}
+	for _, name := range []string{"ZOT_SESSION_ID", "ZOT_SESSION_FILE", "ZOT_PROVIDER", "ZOT_MODEL", "ZOT_REASONING_LEVEL"} {
+		if value := values[name]; value != "" {
+			_ = os.Setenv(name, value)
+		} else {
+			_ = os.Unsetenv(name)
+		}
+	}
 }
 
 func pickSession(root, cwd string) (string, error) {
