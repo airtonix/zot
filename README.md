@@ -816,6 +816,8 @@ A model installed through Ollama is kept in Ollama's internal storage and is not
 
 ## Inline images
 
+Scripts and shell commands launched by zot inherit `ZOT_AGENT=1`. Use this signal when a script needs to distinguish execution inside zot from a standalone invocation.
+
 When a tool returns an image (for example `read` on a PNG), zot renders it inline on terminals that support it: **Ghostty**, **Kitty**, **iTerm2**, **WezTerm**. On other terminals you see a text placeholder with MIME type, pixel dimensions, and byte size. Control with the `ZOT_INLINE_IMAGES` env var:
 
 | Value | Effect |

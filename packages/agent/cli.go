@@ -206,6 +206,11 @@ func fanoutAgentEvent(mgr *extensions.Manager, ev core.AgentEvent) {
 
 // Run is the top-level entrypoint for the zot binary.
 func Run(rawArgs []string, version string) error {
+	// Mark the process and all child processes as running under zot. This
+	// lets shell tools, extensions, and scripts distinguish zot execution
+	// from an ordinary invocation.
+	_ = os.Setenv("ZOT_AGENT", "1")
+
 	// Apply network configuration before any subcommand can make an HTTP
 	// request. Standard proxy environment variables retain precedence.
 	applyConfiguredHTTPProxy()
