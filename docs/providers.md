@@ -90,6 +90,55 @@ These providers support subscription login:
 OAuth tokens are stored in `$ZOT_HOME/auth.json` and refreshed when refresh is
 available.
 
+## GitHub Copilot model availability
+
+The built-in Copilot catalog excludes retired models and utility-only models
+that are not selectable for chat. The default is `claude-sonnet-5`.
+Availability still depends on your plan and organization policies. At startup,
+zot queries Copilot's authenticated `/models` endpoint in the background and
+filters the runtime catalog using picker visibility, policy state, and tool-call
+support. Individual accounts with no eligible picker entries can fall back to
+explicitly enabled model policies; other account types cannot. zot never enables
+policies automatically.
+
+Account availability stays in memory, not the shared model cache. Until discovery
+succeeds, the static catalog remains visible; failed refreshes retain the previous
+snapshot. Command-backed credentials are not executed for background discovery.
+Restart zot after changing accounts to refresh the snapshot. This filter is a
+selection aid, not an authorization boundary. The website displays the public
+catalog, not any individual account's availability.
+
+Claude uses the Anthropic Messages API with Copilot Bearer authentication, without
+Claude Code identity injection. GPT, Grok, and MAI use Responses. Gemini and Kimi
+use Chat Completions without `reasoning_effort`; their reasoning is managed by the
+endpoint. All three routes send user/agent initiator metadata and image-request
+headers where appropriate.
+
+As of September 8, 2026, the catalog includes 27 public chat models: Claude
+Fable 5/5.1, Haiku 4.5, Opus 4.7/4.8/4.8 Fast/5, Sonnet 5, Gemini
+3.5/3.6/3.7/3.8 Flash, GPT-5 mini, GPT-5.3-Codex, GPT-5.4/5.4 mini/5.5,
+GPT-5.6 Luna/Sol/Terra, GPT-6 Astra, Grok 4.5/4.6, Kimi K2.7 Code/K3,
+and MAI-Code-1-Flash/1.1-Flash. MAI-Code-1-Flash uses the public picker ID
+`mai-code-1-flash-picker` and is scheduled to retire on September 10, 2026.
+
+Internal search, execution, and compaction models are not chat choices.
+GPT-5.4 nano is excluded because GitHub offers it in the Codex VS Code
+extension, not Copilot Chat. New entries use Copilot-specific limits and token
+prices from [models.dev](https://models.dev); these are not a quote for your
+subscription bill. Existing zero-priced entries do not imply unlimited free use.
+
+Claude Fable models have different data-retention terms: Anthropic retains
+prompts and outputs by default for safety classifiers. Eligible enterprises
+can request a time-limited zero-data-retention exception from GitHub; enabling
+a model does not itself grant that exception. Review
+[GitHub's model availability and data-retention notes](https://docs.github.com/en/copilot/reference/ai-models/supported-models)
+before using Fable with sensitive data.
+
+Sonnet 4.6 is also excluded from the general catalog: GitHub retired it on
+September 1, 2026, except for individual annual Copilot Pro and Pro+ subscribers.
+Eligible subscribers can add it through `$ZOT_HOME/models.json`.
+See [GitHub's model retirement history and plan exceptions](https://docs.github.com/en/copilot/reference/ai-models/supported-models#model-retirement-history).
+
 ## GPT-6 Astra
 
 Select `gpt-6-astra` with provider `openai`, `openai-responses`,

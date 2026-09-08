@@ -35,12 +35,12 @@ func TestGPT6AstraCatalog(t *testing.T) {
 }
 
 func TestGPT6AstraResponsesReasoning(t *testing.T) {
-	copilot := NewGithubCopilotClient("test-token").(*modelRouter)
+	copilot := NewGithubCopilotClient("test-token").(*copilotClient).router
 	clients := map[string]*codexClient{
 		"openai":           NewOpenAIResponsesNamed("test-token", "", "openai").(*renamedClient).inner.(*codexClient),
 		"openai-responses": NewOpenAIResponsesNamed("test-token", "", "openai-responses").(*renamedClient).inner.(*codexClient),
 		"openai-codex":     NewOpenAICodex("test-token", "test-account", "").(*codexClient),
-		"github-copilot":   copilot.byAPI[APIResponses].(*renamedClient).inner.(*codexClient),
+		"github-copilot":   copilot.byAPI[APIResponses].(*codexClient),
 	}
 	for name, client := range clients {
 		t.Run(name, func(t *testing.T) {
@@ -65,7 +65,7 @@ func TestGPT6AstraResponsesReasoning(t *testing.T) {
 }
 
 func TestGPT6AstraCopilotDispatch(t *testing.T) {
-	router := NewGithubCopilotClient("test-token").(*modelRouter)
+	router := NewGithubCopilotClient("test-token").(*copilotClient).router
 	completions := &routeCaptureClient{name: "github-copilot"}
 	responses := &routeCaptureClient{name: "github-copilot"}
 	router.fallback = completions

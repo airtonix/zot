@@ -31,6 +31,11 @@ func TestCopilotHostRewrite(t *testing.T) {
 		baseURL:   "https://api.enterprise.copilot.proxy",
 	}
 	copilotCache.mu.Unlock()
+	t.Cleanup(func() {
+		copilotCache.mu.Lock()
+		delete(copilotCache.tokens, pat)
+		copilotCache.mu.Unlock()
+	})
 
 	mockRT := &mockRoundTripper{}
 	transport := &copilotRefreshTransport{
@@ -70,15 +75,11 @@ func TestCopilotHostRewrite(t *testing.T) {
 }
 
 func TestCopilotRoutesModernGPTToResponses(t *testing.T) {
-	router, ok := NewGithubCopilotClient("pat").(*modelRouter)
+	client, ok := NewGithubCopilotClient("pat").(*copilotClient)
 	if !ok {
-		t.Fatal("NewGithubCopilotClient did not return a modelRouter")
+		t.Fatal("NewGithubCopilotClient did not return a copilotClient")
 	}
-	responses, ok := router.byAPI[APIResponses].(*renamedClient)
-	if !ok {
-		t.Fatal("github-copilot router has no Responses client")
-	}
-	codex, ok := responses.inner.(*codexClient)
+	codex, ok := client.router.byAPI[APIResponses].(*codexClient)
 	if !ok {
 		t.Fatal("github-copilot Responses client is not a codexClient")
 	}

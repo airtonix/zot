@@ -449,10 +449,11 @@ var DefaultModel = Catalog[0] // claude-sonnet-4-5
 // models loaded via SetLiveModels.
 
 var (
-	activeMu      sync.RWMutex
-	active        []Model // live overlay merged in via SetLiveModels; nil = none yet
-	activeSet     bool    // true once SetLiveModels has run (even with empty live)
-	managedModels []Model // ephemeral models exposed by local model managers
+	activeMu          sync.RWMutex
+	active            []Model                        // live overlay merged in via SetLiveModels; nil = none yet
+	activeSet         bool                           // true once SetLiveModels has run (even with empty live)
+	managedModels     []Model                        // ephemeral models exposed by local model managers
+	modelAvailability = map[string]map[string]bool{} // account-specific, memory only
 )
 
 // SetLiveModels replaces the "live" overlay used by the active catalog.
@@ -479,7 +480,9 @@ func SetLiveModels(live []Model) {
 // Snapshotting Catalog at var-init time would freeze the picker to the
 // curated seed list and drop every extra provider (openrouter, groq,
 // xai, ...). Deferring the read to call time avoids that ordering trap.
-func Active() []Model {
+func Active() []Model { return activeModels(true) }
+
+func activeModels(availableOnly bool) []Model {
 	activeMu.RLock()
 	defer activeMu.RUnlock()
 	src := active
@@ -492,6 +495,9 @@ func Active() []Model {
 		out[i].ReasoningLevelMap = maps.Clone(out[i].ReasoningLevelMap)
 	}
 	if len(managedModels) == 0 {
+		if availableOnly {
+			return filterAvailableModels(out)
+		}
 		return out
 	}
 	index := make(map[string]int, len(out))
@@ -508,6 +514,38 @@ func Active() []Model {
 		index[key] = len(out)
 		out = append(out, model)
 	}
+	if availableOnly {
+		return filterAvailableModels(out)
+	}
+	return out
+}
+
+// SetModelAvailability restricts a provider's visible catalog to the supplied
+// account model IDs. A nil slice clears the restriction; an empty non-nil slice
+// hides all models. This snapshot is not persisted in the shared model cache.
+func SetModelAvailability(provider string, ids []string) {
+	activeMu.Lock()
+	defer activeMu.Unlock()
+	if ids == nil {
+		delete(modelAvailability, provider)
+		return
+	}
+	allowed := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		allowed[id] = true
+	}
+	modelAvailability[provider] = allowed
+}
+
+// Caller holds activeMu. Models is already a private copy.
+func filterAvailableModels(models []Model) []Model {
+	out := models[:0]
+	for _, m := range models {
+		allowed, restricted := modelAvailability[m.Provider]
+		if !restricted || allowed[m.ID] {
+			out = append(out, m)
+		}
+	}
 	return out
 }
 
@@ -522,9 +560,10 @@ func SetManagedModels(models []Model) {
 
 // FindModel returns a Model by id, optionally constrained by provider.
 // If provider is empty, the first matching id is returned. Looks up
-// against the merged active catalog.
+// against the merged catalog, including models hidden by account availability.
+// Existing sessions still need stable wire and pricing metadata after a refresh.
 func FindModel(provider, id string) (Model, error) {
-	for _, m := range Active() {
+	for _, m := range activeModels(false) {
 		if m.ID == id && (provider == "" || m.Provider == provider) {
 			return m, nil
 		}

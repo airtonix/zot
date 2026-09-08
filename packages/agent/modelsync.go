@@ -141,11 +141,28 @@ func ValidateAndRepairConfig() {
 // the baked-in catalog if this fails.
 func RefreshModelsAsync() {
 	go refreshModels()
+	go refreshCopilotModelAvailability()
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		_ = refreshLlamaCPPModels(ctx, apiKeyCommandSkip)
 	}()
+}
+
+// Copilot availability is account-specific and must not use the shared disk cache.
+func refreshCopilotModelAvailability() {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cred, _, err := resolveCredentialForBackground(ctx, "github-copilot")
+	if err != nil {
+		provider.SetModelAvailability("github-copilot", nil)
+		return
+	}
+	ids, err := provider.DiscoverCopilotAvailableModels(ctx, cred)
+	if err != nil {
+		return // Keep the previous snapshot, or the catalog on first-load failure.
+	}
+	provider.SetModelAvailability("github-copilot", ids)
 }
 
 // RefreshLlamaCPPModels adds the router's currently loaded models to the

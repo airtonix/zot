@@ -40,11 +40,11 @@ func TestChatCompletionsURL(t *testing.T) {
 }
 
 func TestGithubCopilotChatCompletionsURL(t *testing.T) {
-	router, ok := NewGithubCopilotClient("test-token").(*modelRouter)
+	copilot, ok := NewGithubCopilotClient("test-token").(*copilotClient)
 	if !ok {
-		t.Fatal("NewGithubCopilotClient did not return a modelRouter")
+		t.Fatal("NewGithubCopilotClient did not return a copilotClient")
 	}
-	client, ok := router.fallback.(*openaiClient)
+	client, ok := copilot.router.fallback.(*openaiClient)
 	if !ok {
 		t.Fatal("GitHub Copilot router fallback is not an openaiClient")
 	}

@@ -14,12 +14,11 @@ package provider
 //     User-Agent). The response carries `{ "token": "...", "expires_at": <unix> }`.
 //  3. The short-lived token's value embeds a `proxy-ep=<host>` field that
 //     tells us the real API host (individual users: api.individual.githubcopilot.com).
-//  4. Inference requests go to `<host>/chat/completions` with the
+//  4. Inference requests use Messages, Responses, or Chat Completions with the
 //     short-lived token in `Authorization: Bearer` plus extras:
 //       - X-Initiator: user|agent
 //       - Openai-Intent: conversation-edits
-//       - Copilot-Vision-Request: true (when images present; not wired
-//         here because the zot openai client currently sends images inline)
+//       - Copilot-Vision-Request: true (when images are present)
 //
 // Token caching: short-lived tokens last ~30min. We cache one per PAT in
 // memory for the process lifetime and refresh on demand. No disk cache.
@@ -162,12 +161,21 @@ func (t *copilotRefreshTransport) RoundTrip(req *http.Request) (*http.Response, 
 	}
 	clone := req.Clone(req.Context())
 	clone.Header.Set("Authorization", "Bearer "+tok.value)
+	// Messages uses Copilot Bearer auth, never an Anthropic API key.
+	clone.Header.Del("x-api-key")
 	// Identity headers also required on inference requests.
 	for k, v := range copilotIdentityHeaders {
 		clone.Header.Set(k, v)
 	}
-	clone.Header.Set("X-Initiator", "agent")
-	clone.Header.Set("Openai-Intent", "conversation-edits")
+	if metadata, ok := req.Context().Value(copilotRequestKey{}).(copilotRequestMetadata); ok {
+		clone.Header.Set("X-Initiator", metadata.initiator)
+		if metadata.vision {
+			clone.Header.Set("Copilot-Vision-Request", "true")
+		} else {
+			clone.Header.Del("Copilot-Vision-Request")
+		}
+		clone.Header.Set("Openai-Intent", "conversation-edits")
+	}
 	// If the request URL host doesn't match the token's proxy-ep, rewrite
 	// it. The openaiClient pinned a static host at construction time, but
 	// the canonical host comes from the token.
@@ -199,14 +207,8 @@ func (t *copilotResponsesStripTransport) RoundTrip(req *http.Request) (*http.Res
 
 const copilotDefaultBaseURL = "https://api.individual.githubcopilot.com"
 
-// NewGithubCopilotClient returns a Copilot-pinned OpenAI-compat client.
-// The pat must be a GitHub Personal Access Token with Copilot access.
-//
-// Copilot exposes two wire protocols: most models use Chat Completions
-// (/chat/completions), while newer GPT models use the Responses API
-// (/responses), including GPT-5.6 (sol/terra/luna) and GPT-6 Astra.
-// A model router dispatches each request to the matching wire client
-// based on the model's catalog API tag.
+// NewGithubCopilotClient uses Messages for Claude, Responses for GPT/Grok/MAI,
+// and Chat Completions for Gemini/Kimi. The PAT is exchanged for Copilot tokens.
 func NewGithubCopilotClient(pat string) Client {
 	refresh := &copilotRefreshTransport{inner: http.DefaultTransport, pat: pat}
 	completionsHTTP := &http.Client{Transport: refresh, Timeout: 0}
@@ -233,7 +235,15 @@ func NewGithubCopilotClient(pat string) Client {
 		http:              responsesHTTP,
 	}
 
-	return NewModelRouter("github-copilot", completions, map[string]Client{
-		APIResponses: &renamedClient{inner: responses, name: "github-copilot"},
-	})
+	messages := &anthropicClient{
+		name:    "github-copilot",
+		baseURL: copilotDefaultBaseURL,
+		// Do not set oauthTok: that would inject Claude Code identity and rename tools.
+		http: &http.Client{Transport: refresh},
+	}
+	return &copilotClient{router: NewModelRouter("github-copilot", completions, map[string]Client{
+		APICompletions:       completions,
+		APIResponses:         responses,
+		APIAnthropicMessages: messages,
+	}).(*modelRouter)}
 }

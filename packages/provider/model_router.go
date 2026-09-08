@@ -6,6 +6,8 @@ import (
 )
 
 const (
+	// APIAnthropicMessages identifies the Anthropic Messages wire API.
+	APIAnthropicMessages = "anthropic-messages"
 	// APICompletions identifies the OpenAI Chat Completions wire API.
 	APICompletions = "openai-completions"
 	// APIResponses identifies the OpenAI Responses wire API.

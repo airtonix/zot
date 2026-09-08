@@ -215,7 +215,7 @@ func defaultModelForProvider(prov string) string {
 	case "azure-openai-responses":
 		return "gpt-5"
 	case "github-copilot":
-		return "claude-sonnet-4.5"
+		return "claude-sonnet-5"
 	default:
 		// Custom providers: pick the first model from the catalog for
 		// that provider, or fall back to the global default.
