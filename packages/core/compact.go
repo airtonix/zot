@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"strconv"
 	"strings"
@@ -26,6 +27,18 @@ func (a *Agent) Compact(ctx context.Context, keepTail int, sink func(delta strin
 	msgs := append([]provider.Message(nil), a.messages...)
 	a.mu.Unlock()
 
+	id := rand.Text()
+	if a.OnEvent != nil {
+		a.OnEvent(EvCompact{Phase: "pre", ID: id, MessageCount: len(msgs), TokenEstimate: len(serializeTranscript(msgs)) / 4})
+		defer func() {
+			after := a.Messages()
+			status := "completed"
+			if err != nil {
+				status = executionErrorStatus(err)
+			}
+			a.OnEvent(EvCompact{Phase: "post", ID: id, MessageCount: len(after), TokenEstimate: len(serializeTranscript(after)) / 4, Status: status, Err: err})
+		}()
+	}
 	if len(msgs) == 0 {
 		return "", fmt.Errorf("nothing to compact")
 	}

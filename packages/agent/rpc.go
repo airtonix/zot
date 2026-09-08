@@ -84,7 +84,7 @@ func runRPCMode(ctx context.Context, args Args, version string) error {
 		ag.SetTools(resolved.ToolRegistry)
 	})
 
-	extMgr.EmitEvent(extproto.EventFromHost{Event: "session_start"})
+	startExtensionSession(extMgr, ag, r.CWD, "")
 
 	server := &rpcServer{
 		ctx:      ctx,

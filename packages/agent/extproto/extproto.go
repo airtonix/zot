@@ -183,17 +183,43 @@ type ToolCallFromHost struct {
 	Args json.RawMessage `json:"args"`
 }
 
+// EventResult is a tool outcome without extension-private Details or activation data.
+type EventResult struct {
+	Content   []ContentBlock `json:"content"`
+	IsError   bool           `json:"is_error"`
+	Truncated bool           `json:"truncated,omitempty"`
+}
+
 type EventFromHost struct {
-	Type        string          `json:"type"`
-	Event       string          `json:"event"`
-	Step        int             `json:"step,omitempty"`
-	Stop        string          `json:"stop,omitempty"`
-	Error       string          `json:"error,omitempty"`
-	ToolID      string          `json:"tool_id,omitempty"`
-	ToolName    string          `json:"tool_name,omitempty"`
-	ToolArgs    json.RawMessage `json:"tool_args,omitempty"`
-	ToolPreview string          `json:"tool_preview,omitempty"`
-	Text        string          `json:"text,omitempty"`
+	SessionID     string          `json:"session_id,omitempty"`
+	AgentRunID    string          `json:"agent_run_id,omitempty"`
+	Queued        bool            `json:"queued,omitempty"`
+	ImageCount    int             `json:"image_count,omitempty"`
+	CWD           string          `json:"cwd,omitempty"`
+	Sequence      uint64          `json:"sequence,omitempty"`
+	Status        string          `json:"status,omitempty"`
+	Reason        string          `json:"reason,omitempty"`
+	Source        string          `json:"source,omitempty"`
+	Decision      string          `json:"decision,omitempty"`
+	Stage         string          `json:"stage,omitempty"`
+	Result        *EventResult    `json:"result,omitempty"`
+	Executed      *bool           `json:"executed,omitempty"`
+	CompactionID  string          `json:"compaction_id,omitempty"`
+	MessageCount  *int            `json:"message_count,omitempty"`
+	TokenEstimate *int            `json:"token_estimate,omitempty"`
+	AgentID       string          `json:"agent_id,omitempty"`
+	Name          string          `json:"name,omitempty"`
+	Type          string          `json:"type"`
+	Event         string          `json:"event"`
+	Step          int             `json:"step,omitempty"`
+	Stop          string          `json:"stop,omitempty"`
+	Error         string          `json:"error,omitempty"`
+	ToolID        string          `json:"tool_id,omitempty"`
+	ToolName      string          `json:"tool_name,omitempty"`
+	ToolArgs      json.RawMessage `json:"tool_args,omitempty"`
+	ToolPreview   string          `json:"tool_preview,omitempty"`
+	ToolArgsRaw   string          `json:"tool_args_raw,omitempty"`
+	Text          string          `json:"text,omitempty"`
 }
 
 type EventInterceptFromHost struct {

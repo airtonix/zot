@@ -348,6 +348,7 @@ func (f *Swarm) Resume(ctx context.Context, id string) (*Agent, error) {
 		Model: existing.Model, Provider: existing.Provider,
 		InboxPath: inboxPath, EventLogPath: existing.EventLogPath,
 		SessionPath: existing.SessionPath,
+		SessionID:   existing.SessionID,
 	}
 
 	a := &Agent{
@@ -361,6 +362,7 @@ func (f *Swarm) Resume(ctx context.Context, id string) (*Agent, error) {
 		EventLogPath: m.EventLogPath,
 		SessionPath:  m.SessionPath,
 		Resuming:     true,
+		SessionID:    m.SessionID,
 		inbox:        NewInbox(m.InboxPath),
 		status:       StatusPending,
 		activity:     "resuming",

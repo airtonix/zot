@@ -36,7 +36,8 @@ func (t *PowerShellTool) Execute(ctx context.Context, raw json.RawMessage, progr
 	})
 }
 
-func (t *PowerShellTool) checkPermission(_ string) error {
+func (t *PowerShellTool) checkPermission(_ string) (err error) {
+	defer markPolicyError(&err)
 	// The existing shell heuristics parse neither PowerShell expressions nor
 	// cmdlets. Do not treat them as enforcement for a different language.
 	if t.Sandbox.Locked() {

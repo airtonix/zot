@@ -3,6 +3,7 @@ package extensions
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -58,7 +59,15 @@ func (t *extensionTool) Execute(ctx context.Context, args json.RawMessage, _ fun
 	}
 	resp, err := t.manager.InvokeTool(ctx, t.name, args, t.timeout)
 	if err != nil {
+		status := "failed"
+		if errors.Is(err, context.Canceled) {
+			status = "cancelled"
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			status = "timed_out"
+		}
 		return core.ToolResult{
+			Status:  status,
 			IsError: true,
 			Content: []provider.Content{provider.TextBlock{Text: fmt.Sprintf("extension %s/%s failed: %v", t.extension, t.name, err)}},
 		}, nil

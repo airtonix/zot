@@ -38,7 +38,8 @@ func (s *Sandbox) Locked() bool { return s != nil && s.locked.Load() }
 // CheckPath verifies that path resolves inside the sandbox root.
 // Returns an error describing the violation if not. No-op when unlocked.
 // Callers should pass an already-absolute path (use resolvePath() first).
-func (s *Sandbox) CheckPath(path string) error {
+func (s *Sandbox) CheckPath(path string) (err error) {
+	defer markPolicyError(&err)
 	if !s.Locked() {
 		return nil
 	}
@@ -98,7 +99,8 @@ func (s *Sandbox) DisplayPath(abs, given string) string {
 // when jailed. We cannot fully sandbox a shell, but we can reject the
 // most obvious escapes so the model does not accidentally touch files
 // outside root via shell arguments or redirections.
-func (s *Sandbox) CheckCommand(cmd string) error {
+func (s *Sandbox) CheckCommand(cmd string) (err error) {
+	defer markPolicyError(&err)
 	if !s.Locked() {
 		return nil
 	}

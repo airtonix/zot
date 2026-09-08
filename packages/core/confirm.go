@@ -12,6 +12,8 @@ import (
 // of the session.
 type ConfirmDecision struct {
 	Allow bool
+	// Source identifies the authority: user, remembered, policy, or yolo.
+	Source string
 	// Reason is shown to the model as the tool error when
 	// Allow=false. Examples: "user declined", "user refused: rm -rf
 	// looks dangerous".
@@ -63,9 +65,10 @@ type ToolCallConfirmer interface {
 type ConfirmGate struct {
 	inner Confirmer
 
-	mu          sync.Mutex
-	allowAll    bool
-	allowedTool map[string]bool
+	mu             sync.Mutex
+	allowAll       bool
+	allowAllSource string
+	allowedTool    map[string]bool
 }
 
 // NewConfirmGate returns a gate backed by inner. Inner can be nil;
@@ -91,22 +94,29 @@ func (g *ConfirmGate) Check(toolName, preview string) (bool, string, json.RawMes
 // CheckToolCall behaves like Check and additionally gives rich confirmation
 // UIs the call ID and side-effect-free preview content.
 func (g *ConfirmGate) CheckToolCall(call ToolCallConfirmation) (bool, string, json.RawMessage) {
+	d := g.DecideToolCall(call)
+	return d.Allow, d.Reason, nil
+}
+
+// DecideToolCall preserves decision provenance for observational consumers.
+func (g *ConfirmGate) DecideToolCall(call ToolCallConfirmation) ConfirmDecision {
 	if g == nil {
-		return true, "", nil
+		return ConfirmDecision{Allow: true, Source: "yolo"}
 	}
 	g.mu.Lock()
 	if g.allowAll {
+		source := g.allowAllSource
 		g.mu.Unlock()
-		return true, "", nil
+		return ConfirmDecision{Allow: true, Source: source}
 	}
 	if g.allowedTool[call.Name] {
 		g.mu.Unlock()
-		return true, "", nil
+		return ConfirmDecision{Allow: true, Source: "remembered"}
 	}
 	inner := g.inner
 	g.mu.Unlock()
 	if inner == nil {
-		return false, "tool call refused: --no-yolo is active and there is no interactive prompt in this mode; ask the user what to do instead", nil
+		return ConfirmDecision{Source: "policy", Reason: "tool call refused: --no-yolo is active and there is no interactive prompt in this mode; ask the user what to do instead"}
 	}
 
 	var decision ConfirmDecision
@@ -120,6 +130,7 @@ func (g *ConfirmGate) CheckToolCall(call ToolCallConfirmation) (bool, string, js
 	if decision.Allow {
 		if decision.RememberAll {
 			g.allowAll = true
+			g.allowAllSource = "remembered"
 		}
 		if decision.RememberTool {
 			g.allowedTool[call.Name] = true
@@ -131,7 +142,9 @@ func (g *ConfirmGate) CheckToolCall(call ToolCallConfirmation) (bool, string, js
 	if !decision.Allow && reason == "" {
 		reason = "tool call refused by user"
 	}
-	return decision.Allow, reason, nil
+	decision.Reason = reason
+	decision.Source = "user"
+	return decision
 }
 
 // Reset clears the session memory. Invoked when the user toggles
@@ -155,6 +168,7 @@ func (g *ConfirmGate) AllowAll() {
 	}
 	g.mu.Lock()
 	g.allowAll = true
+	g.allowAllSource = "yolo"
 	g.mu.Unlock()
 }
 

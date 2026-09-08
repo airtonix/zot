@@ -63,17 +63,49 @@ type ToolHandler func(args json.RawMessage) ToolResult
 // worker.
 type EventHandler func(ev Event)
 
-// Event is a lifecycle notification from zot. The fields populated
-// depend on Name (the host's event_name string):
+// EventResult contains bounded text/base64-image tool output for observers.
+// Truncated reports omitted or shortened content, not execution failure.
+type EventResult = extproto.EventResult
+
+// Event is an observational lifecycle notification. SessionID, CWD and Sequence
+// identify its context. Name selects the remaining payload:
 //
-//	session_start    : (no extra fields)
-//	turn_start       : Step
-//	turn_end                  : Stop, optional Error
-//	tool_call                 : ToolID, ToolName, ToolArgs
+//	session_start: no additional fields
+//	session_end: Reason
+//	user_prompt_submit: Text, Queued, ImageCount
+//	turn_start: Step
+//	turn_end: Stop, Error (model-response boundary, before client tools)
+//	tool_call: ToolID, ToolName, ToolArgs (original arguments)
+//	tool_result: ToolID, ToolName, ToolArgs (effective), Status, Executed, Result
 //	tool_confirmation_requested: ToolID, ToolName, ToolPreview
-//	assistant_message         : Text
+//	permission_decision: ToolID, ToolName, Decision, Source, Stage, Reason
+//	assistant_message: Text
+//	pre_compact, post_compact: CompactionID, MessageCount, TokenEstimate, Status, Error
+//	subagent_start, subagent_stop: AgentID, AgentRunID, AgentName, Status, Error
+//
+// Result and count pointers distinguish absent fields from false/zero values.
+// Notifications are best-effort, not a durable audit log. See docs/extensions.md
+// for payload limits, privacy considerations, and delivery semantics.
 type Event struct {
-	Name string
+	Name          string
+	AgentRunID    string
+	SessionID     string
+	Queued        bool
+	ImageCount    int
+	CWD           string
+	Sequence      uint64
+	Status        string
+	Reason        string
+	Source        string
+	Decision      string
+	Stage         string
+	Result        *EventResult
+	Executed      *bool
+	CompactionID  string
+	MessageCount  *int
+	TokenEstimate *int
+	AgentID       string
+	AgentName     string
 
 	Step  int
 	Stop  string
@@ -83,6 +115,7 @@ type Event struct {
 	ToolName    string
 	ToolArgs    json.RawMessage
 	ToolPreview string
+	ToolArgsRaw string
 
 	Text string
 }
@@ -426,8 +459,9 @@ func (e *Extension) registerTool(name, description string, schema json.RawMessag
 // On subscribes to a lifecycle event. fn is called for each
 // notification; the same name can only have one handler (later
 // registrations replace earlier ones). Recognised names:
-// session_start, turn_start, turn_end, tool_call,
-// tool_confirmation_requested, assistant_message.
+// session_start, session_end, user_prompt_submit, turn_start, turn_end,
+// tool_call, tool_result, tool_confirmation_requested, permission_decision,
+// assistant_message, pre_compact, post_compact, subagent_start, subagent_stop.
 func (e *Extension) On(name string, fn EventHandler) {
 	e.mu.Lock()
 	if _, exists := e.eventHandlers[name]; !exists {
@@ -669,8 +703,13 @@ func (e *Extension) Run() error {
 					}()
 					handler(Event{
 						Name: ef.Event, Step: ef.Step, Stop: ef.Stop,
+						SessionID: ef.SessionID, AgentRunID: ef.AgentRunID, Queued: ef.Queued, ImageCount: ef.ImageCount, CWD: ef.CWD, Sequence: ef.Sequence,
+						Status: ef.Status, Reason: ef.Reason, Source: ef.Source, Decision: ef.Decision, Stage: ef.Stage,
+						Result: ef.Result, Executed: ef.Executed, CompactionID: ef.CompactionID,
+						MessageCount: ef.MessageCount, TokenEstimate: ef.TokenEstimate,
+						AgentID: ef.AgentID, AgentName: ef.Name,
 						Error: ef.Error, ToolID: ef.ToolID, ToolName: ef.ToolName,
-						ToolArgs: ef.ToolArgs, ToolPreview: ef.ToolPreview, Text: ef.Text,
+						ToolArgs: ef.ToolArgs, ToolArgsRaw: ef.ToolArgsRaw, ToolPreview: ef.ToolPreview, Text: ef.Text,
 					})
 				}()
 			}

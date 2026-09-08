@@ -32,12 +32,23 @@ type ToolPreviewer interface {
 	Preview(ctx context.Context, args json.RawMessage) (ToolResult, error)
 }
 
+// ToolPolicyError marks a tool-local policy refusal without changing its text.
+// It does not imply that other calls in the same batch were rolled back.
+type ToolPolicyError struct{ Err error }
+
+func (e *ToolPolicyError) Error() string { return e.Err.Error() }
+func (e *ToolPolicyError) Unwrap() error { return e.Err }
+
 // ToolResult is the outcome of Tool.Execute.
 type ToolResult struct {
 	// Content is sent back to the LLM (text and/or images).
 	Content []provider.Content
 	// IsError marks this result as an error to the LLM.
 	IsError bool
+	// Status optionally refines an error result for lifecycle observers.
+	// Tools that return cancellation as content rather than an error may set
+	// cancelled or timed_out; policy refusals may set blocked.
+	Status string
 	// ActivateTools names previously deferred tools that become available
 	// after this result. Unknown names are ignored by the agent.
 	ActivateTools []string

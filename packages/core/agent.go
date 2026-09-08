@@ -48,6 +48,10 @@ type Agent struct {
 	// malformed modifiedArgs is ignored.
 	BeforeToolExecute func(call provider.ToolCallBlock) (allowed bool, reason string, modifiedArgs json.RawMessage)
 
+	// BeforeToolExecuteContext is the context-aware variant. When set it takes
+	// precedence over BeforeToolExecute, retaining the legacy hook for embedders.
+	BeforeToolExecuteContext func(context.Context, provider.ToolCallBlock) (bool, string, json.RawMessage)
+
 	// BeforeStart replaces the complete system prompt once per runtime session
 	// or explicit prompt/model reset, before any turn starts. It is not called
 	// for ordinary follow-up messages or tool-loop steps.
@@ -78,7 +82,9 @@ type Agent struct {
 	// OnEvent, if set, mirrors every AgentEvent the loop emits to
 	// this callback in addition to the per-Prompt sink. Used by the
 	// extension manager to fan events out to subscribed extensions
-	// without each caller having to compose sinks manually.
+	// without each caller having to compose sinks manually. Prompt submission
+	// and compaction lifecycle notifications go only to OnEvent, preserving the
+	// existing per-Prompt stream consumed by RPC and embedded SDK clients.
 	OnEvent func(AgentEvent)
 
 	// OnMessageAppended, if set, fires every time a message is
@@ -148,6 +154,9 @@ func (a *Agent) QueueMessage(text string) bool {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return false
+	}
+	if a.OnEvent != nil {
+		a.OnEvent(EvPromptSubmit{Text: text, Queued: true})
 	}
 	a.mu.Lock()
 	a.queued = append(a.queued, text)
@@ -340,6 +349,9 @@ func (a *Agent) Prompt(ctx context.Context, text string, images []provider.Image
 		sink = func(AgentEvent) {}
 	}
 	sink = a.wrapSink(sink)
+	if a.OnEvent != nil {
+		a.OnEvent(EvPromptSubmit{Text: text, ImageCount: len(images)})
+	}
 	content := []provider.Content{}
 	if text != "" {
 		content = append(content, provider.TextBlock{Text: text})
@@ -742,7 +754,6 @@ func (a *Agent) executeTools(ctx context.Context, msg provider.Message, sink fun
 				addedTools = append(addedTools, name)
 			}
 		}
-		sink(EvToolResult{ID: tc.ID, Result: res})
 	}
 
 	return provider.Message{
@@ -753,7 +764,29 @@ func (a *Agent) executeTools(ctx context.Context, msg provider.Message, sink fun
 	}, hadError
 }
 
-func (a *Agent) runOneTool(ctx context.Context, tc provider.ToolCallBlock, sink func(AgentEvent)) ToolResult {
+func (a *Agent) runOneTool(ctx context.Context, tc provider.ToolCallBlock, sink func(AgentEvent)) (result ToolResult) {
+	args := tc.Arguments
+	status := ""
+	executed := false
+	defer func() {
+		if status == "" {
+			status = "completed"
+			if result.IsError {
+				status = "failed"
+				switch result.Status {
+				case "cancelled", "timed_out", "blocked":
+					status = result.Status
+				}
+			}
+		}
+		if sink != nil {
+			sink(EvToolResult{ID: tc.ID, Name: tc.Name, Args: args, Status: status, Executed: executed, Result: result})
+		}
+	}()
+	if err := ctx.Err(); err != nil {
+		status = executionErrorStatus(err)
+		return ToolResult{IsError: true, Content: []provider.Content{provider.TextBlock{Text: "aborted: " + err.Error()}}}
+	}
 	tool, err := a.Tools.Get(tc.Name)
 	if err != nil {
 		return ToolResult{
@@ -762,17 +795,28 @@ func (a *Agent) runOneTool(ctx context.Context, tc provider.ToolCallBlock, sink 
 		}
 	}
 
-	args := tc.Arguments
-
 	// Intercept hook: an extension or other guard can refuse the
 	// call before any side effect happens, OR rewrite the args
 	// seen by the tool. The model sees the reason as the tool
 	// error, learns from it, and (typically) proposes a different
 	// action; rewrites are invisible to the model (they apply only
 	// to the execution).
-	if a.BeforeToolExecute != nil {
-		allowed, reason, modified := a.BeforeToolExecute(tc)
+	before := a.BeforeToolExecute
+	if a.BeforeToolExecuteContext != nil {
+		before = func(call provider.ToolCallBlock) (bool, string, json.RawMessage) {
+			return a.BeforeToolExecuteContext(ctx, call)
+		}
+	}
+	if before != nil {
+		allowed, reason, modified := before(tc)
+		if len(modified) > 0 && json.Valid(modified) {
+			args = modified
+		}
 		if !allowed {
+			status = "blocked"
+			if ctx.Err() != nil {
+				status = executionErrorStatus(ctx.Err())
+			}
 			if reason == "" {
 				reason = "tool call refused by extension guard"
 			}
@@ -781,11 +825,12 @@ func (a *Agent) runOneTool(ctx context.Context, tc provider.ToolCallBlock, sink 
 				IsError: true,
 			}
 		}
-		if len(modified) > 0 && json.Valid(modified) {
-			args = modified
-		}
 	}
 
+	if err := ctx.Err(); err != nil {
+		status = executionErrorStatus(err)
+		return ToolResult{IsError: true, Content: []provider.Content{provider.TextBlock{Text: "aborted: " + err.Error()}}}
+	}
 	if len(args) == 0 {
 		args = json.RawMessage("{}")
 	}
@@ -801,10 +846,12 @@ func (a *Agent) runOneTool(ctx context.Context, tc provider.ToolCallBlock, sink 
 				}
 			}
 		}()
+		executed = true
 		out, err := tool.Execute(ctx, args, func(text string) {
 			sink(EvToolProgress{ID: tc.ID, Text: text})
 		})
 		if err != nil {
+			status = executionErrorStatus(err)
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				res = ToolResult{
 					Content: []provider.Content{provider.TextBlock{Text: "aborted: " + err.Error()}},
@@ -821,6 +868,20 @@ func (a *Agent) runOneTool(ctx context.Context, tc provider.ToolCallBlock, sink 
 		res = out
 	}()
 	return res
+}
+
+func executionErrorStatus(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "timed_out"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "cancelled"
+	}
+	var policyErr *ToolPolicyError
+	if errors.As(err, &policyErr) {
+		return "blocked"
+	}
+	return "failed"
 }
 
 // extractText concatenates all TextBlock content in a message. Used

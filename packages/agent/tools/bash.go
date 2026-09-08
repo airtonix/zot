@@ -201,7 +201,15 @@ func executeShell(ctx context.Context, raw json.RawMessage, progress func(string
 	fmt.Fprintf(&sb, "  Took %s", humanDuration(elapsed))
 
 	isErr := exitCode != 0 || runCtx.Err() != nil
+	status := ""
+	if runCtx.Err() == context.DeadlineExceeded {
+		status = "timed_out"
+	}
+	if runCtx.Err() == context.Canceled {
+		status = "cancelled"
+	}
 	return core.ToolResult{
+		Status:  status,
 		Content: []provider.Content{provider.TextBlock{Text: sb.String()}},
 		IsError: isErr,
 		Details: map[string]any{

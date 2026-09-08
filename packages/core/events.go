@@ -19,6 +19,16 @@ type EvTurnStart struct {
 
 func (EvTurnStart) Type() string { return "turn_start" }
 
+// EvPromptSubmit observes accepted model input before it is appended or queued.
+// Queued input can subsequently be withdrawn without reaching the model.
+type EvPromptSubmit struct {
+	Text       string
+	Queued     bool
+	ImageCount int
+}
+
+func (EvPromptSubmit) Type() string { return "user_prompt_submit" }
+
 type EvUserMessage struct {
 	Message provider.Message
 }
@@ -85,11 +95,28 @@ type EvToolProgress struct {
 func (EvToolProgress) Type() string { return "tool_progress" }
 
 type EvToolResult struct {
-	ID     string
-	Result ToolResult
+	ID       string
+	Name     string
+	Args     json.RawMessage // effective arguments, or last proposed arguments if blocked
+	Status   string          // completed, failed, blocked, cancelled, timed_out
+	Executed bool            // whether Tool.Execute was entered
+	Result   ToolResult
 }
 
 func (EvToolResult) Type() string { return "tool_result" }
+
+// EvCompact brackets a compaction attempt, including failed and cancelled attempts.
+// TokenEstimate is a rough text estimate, not provider token usage.
+type EvCompact struct {
+	Phase         string
+	ID            string
+	MessageCount  int
+	TokenEstimate int
+	Status        string
+	Err           error
+}
+
+func (e EvCompact) Type() string { return e.Phase + "_compact" }
 
 type EvUsage struct {
 	Usage      provider.Usage

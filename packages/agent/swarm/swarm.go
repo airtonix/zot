@@ -25,6 +25,7 @@ package swarm
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"os"
@@ -47,8 +48,17 @@ const (
 	StatusDetached Status = "detached" // reloaded from disk; no live runner
 )
 
+// LifecycleEvent reports a locally supervised task, not a reloaded detached task.
+type LifecycleEvent struct {
+	Event, SessionID, AgentID, AgentRunID, Name, CWD, Status, Error string
+}
+
 // Config configures a Swarm.
 type Config struct {
+	// OnLifecycle observes start and terminal outcomes outside supervisor locks.
+	// It must return promptly. Different agents may invoke it concurrently.
+	OnLifecycle func(LifecycleEvent)
+
 	// Root is the directory under which per-agent state files live.
 	// Typically <ZotHome>/swarm, but tests pass a tempdir.
 	Root string
@@ -288,8 +298,20 @@ func (f *Swarm) SendUserTurn(id, text string) error {
 }
 
 func (f *Swarm) run(a *Agent) {
-	a.setStatus(StatusRunning)
-	a.setActivity("starting")
+	runID := rand.Text()
+	sessionID := a.SessionID
+	if sessionID == "" {
+		sessionID = f.ActiveSession()
+	}
+	if f.cfg.OnLifecycle != nil {
+		f.cfg.OnLifecycle(LifecycleEvent{Event: "subagent_start", SessionID: sessionID, AgentID: a.ID, AgentRunID: runID, Name: a.ID, CWD: a.Dir})
+	}
+	a.mu.Lock()
+	if a.status == StatusPending {
+		a.status = StatusRunning
+		a.activity = "starting"
+	}
+	a.mu.Unlock()
 	err := a.runner.Run(a.ctx, agentSink{a: a})
 	a.mu.Lock()
 	a.finished = f.cfg.Now()
@@ -307,7 +329,23 @@ func (f *Swarm) run(a *Agent) {
 		a.status = StatusDone
 		a.activity = "done"
 	}
+	status := "completed"
+	switch {
+	case a.status == StatusKilled:
+		status = "cancelled"
+	case errors.Is(err, context.DeadlineExceeded):
+		status = "timed_out"
+	case err != nil:
+		status = "failed"
+	}
 	a.mu.Unlock()
+	if f.cfg.OnLifecycle != nil {
+		e := LifecycleEvent{Event: "subagent_stop", SessionID: sessionID, AgentID: a.ID, AgentRunID: runID, Name: a.ID, CWD: a.Dir, Status: status}
+		if err != nil {
+			e.Error = err.Error()
+		}
+		f.cfg.OnLifecycle(e)
+	}
 	close(a.done)
 }
 
@@ -389,6 +427,22 @@ func (f *Swarm) Stop(id string) error {
 func (f *Swarm) StopAll() {
 	for _, a := range f.List() {
 		_ = f.Stop(a.ID)
+	}
+}
+
+// Shutdown cancels local tasks and waits for terminal notifications until ctx
+// expires. Detached tasks have no local runner and are not waited on.
+func (f *Swarm) Shutdown(ctx context.Context) {
+	f.StopAll()
+	for _, a := range f.List() {
+		if a.Status() == StatusDetached {
+			continue
+		}
+		select {
+		case <-a.done:
+		case <-ctx.Done():
+			return
+		}
 	}
 }
 

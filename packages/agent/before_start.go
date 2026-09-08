@@ -14,7 +14,10 @@ func wireBeforeAgentStart(ag *core.Agent, mgr *extensions.Manager, provider stri
 	ag.BeforeStart = func(ctx context.Context, system string) string {
 		session := ag.SessionID
 		if session == "" {
-			session = runtimeSession
+			session, _ = mgr.SessionContext()
+			if session == "" {
+				session = runtimeSession
+			}
 		}
 		return mgr.InterceptBeforeAgentStart(ctx, extproto.EventInterceptFromHost{
 			SystemPrompt: &system, SessionID: session, AgentRunID: rand.Text(),

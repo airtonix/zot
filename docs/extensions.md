@@ -252,8 +252,12 @@ which it wants to intercept. Send once after `hello`, before `ready`.
  "intercept":["tool_call","turn_start","assistant_message"]}
 ```
 
-Recognised event names: `session_start`, `turn_start`, `turn_end`,
-`tool_call`, `tool_confirmation_requested`, `assistant_message`.
+Recognised event names: `session_start`, `session_end`, `user_prompt_submit`,
+`turn_start`, `turn_end`, `tool_call`, `tool_result`,
+`tool_confirmation_requested`, `permission_decision`, `assistant_message`,
+`pre_compact`, `post_compact`, `subagent_start`, `subagent_stop`.
+The new lifecycle events are observational only; adding them to `intercept`
+does not make them blocking hooks. See [Lifecycle payloads](#lifecycle-payloads).
 
 `tool_confirmation_requested` fires only when zot is about to wait for
 interactive approval. Calls running in yolo mode, calls covered by a
@@ -503,7 +507,8 @@ marked as failed.
 #### `event`
 
 Lifecycle notification for events the extension subscribed to via
-`subscribe`. One-way — no response expected.
+`subscribe`. One-way, no response expected. Fields are additive under protocol
+version 1. Clients must tolerate unknown fields and event names.
 
 ```json
 {"type":"event","event":"turn_start","step":1}
@@ -513,6 +518,164 @@ Lifecycle notification for events the extension subscribed to via
  "tool_id":"...","tool_name":"read","tool_preview":"foo.go"}
 {"type":"event","event":"turn_end","stop":"end_turn"}
 ```
+
+### Lifecycle payloads
+
+Notifications include `session_id`, `cwd`, and a monotonically increasing
+`sequence` scoped to the extension manager's lifetime. Sequence numbers span
+all notifications, not just an extension's subscriptions, so gaps do not by
+themselves indicate lost delivery. They reset when zot restarts. Correlate tool
+outcomes with `(session_id, tool_id)`, compaction with `compaction_id`, and swarm
+runs with `agent_run_id`. These are payload identifiers, not request/reply IDs.
+
+| Event | Additional payload | Meaning |
+|---|---|---|
+| `session_start` | No additional fields | An active conversation opens |
+| `session_end` | `reason` | The active conversation closes |
+| `user_prompt_submit` | `text`, optional `queued`, `image_count` | Model input accepted, before appending or queueing |
+| `turn_start` | `step` | A model step begins |
+| `turn_end` | `stop`, optional `error` | A model response attempt finishes, before client tool execution |
+| `tool_call` | `tool_id`, `tool_name`, `tool_args` | The model's original proposed call |
+| `tool_confirmation_requested` | `tool_id`, `tool_name`, `tool_preview` | Interactive approval is about to be requested |
+| `permission_decision` | `tool_id`, `tool_name`, `decision`, `source`, `stage`, optional `reason` | An approval or policy decision was resolved |
+| `tool_result` | `tool_id`, `tool_name`, `tool_args`, `status`, `executed`, `result` | A client tool call reached a terminal outcome |
+| `assistant_message` | `text` | Visible assistant text |
+| `pre_compact` | `compaction_id`, `message_count`, `token_estimate` | A compaction attempt begins |
+| `post_compact` | Same counts and ID, `status`, optional `error` | A compaction attempt finishes, including failure |
+| `subagent_start` | `agent_id`, `agent_run_id`, `name` | A local swarm runner starts or resumes |
+| `subagent_stop` | Same identity, `status`, optional `error` | That local swarm runner returns |
+
+#### Prompt submission
+
+`text` is the input handed to the agent after host preprocessing, not raw editor
+keystrokes. This includes extension-generated prompts and queued follow-ups.
+Queued input emits once at acceptance with `queued:true`, not again at
+consumption; it can subsequently be withdrawn without reaching the model.
+Image bytes are not included; `image_count` reports attached images. An
+image-only prompt may omit `text`. Slash commands that do not submit model
+input, transcript replay, compaction summaries, and internal image mirrors do
+not emit this event.
+
+#### Tool outcomes and permission decisions
+
+```json
+{"type":"event","event":"tool_result","session_id":"session-1","cwd":"/work","sequence":12,"tool_id":"call-1","tool_name":"bash","tool_args":{"command":"go test ./..."},"status":"completed","executed":true,"result":{"content":[{"type":"text","text":"ok"}],"is_error":false}}
+```
+
+`status` is `completed`, `failed`, `blocked`, `cancelled`, or `timed_out`.
+Failures include unknown tools, panics, and tool error results. Guards and
+built-in jail/manifest policy refusals are `blocked`. Cancellation and timeout
+classification uses typed execution errors or explicit tool outcome metadata,
+not error-message matching. A custom tool that reports only `is_error` without
+such metadata is classified as `failed`.
+
+`tool_args` contains effective arguments, including accepted interceptor
+rewrites and the empty-argument default `{}`. For a call refused before
+execution, it contains the last proposed arguments instead. If the arguments
+are malformed JSON, `tool_args_raw` contains their raw text and `tool_args` is
+omitted, so the outcome remains a valid protocol frame. `executed` means
+`Tool.Execute` was entered, not that a side effect occurred or was rolled back.
+A tool-local policy refusal can therefore be `blocked` with `executed:true`.
+Pending calls cancelled before execution still receive terminal results.
+Provider-executed server tools do not receive client `tool_result` events.
+
+`result.content` uses text and base64 image blocks. Observation payloads have a
+256 KiB combined text/base64/MIME-data budget and a 128-block limit. Text may be
+shortened at a UTF-8 boundary; oversized images and unsupported block types are
+omitted. `result.truncated:true` marks any omission. Tool execution, the model's
+result, and the persisted transcript are not truncated by this observation
+limit. Private `Details` and tool activation metadata are not exported.
+
+```json
+{"type":"event","event":"permission_decision","session_id":"session-1","tool_id":"call-1","tool_name":"bash","decision":"approved","source":"user","stage":"pre_execution"}
+```
+
+`decision` is `approved`, `denied`, or `cancelled`. `source` is `user`,
+`remembered`, `policy`, or `yolo`. Automatic approval is represented by an
+approved decision with its source, not a separate decision value. Guard
+refusals, preview failures, and no available confirmer use `policy`.
+
+A `pre_execution` approval does not bypass tool-local checks. If a tool later
+refuses access, an additional denied decision with `source:"policy"` and
+`stage:"tool_execution"` precedes its blocked result. These events cannot grant
+permission or override a refusal. Calls cancelled before checking permission
+or rejected as unknown tools can have a result without a permission decision.
+Existing mode-specific confirmation behavior is unchanged, including modes
+that do not support interactive approval.
+
+#### Session, compaction, and swarm boundaries
+
+Sessions use the persisted conversation ID when available, otherwise a
+runtime-generated ID. Interactive and RPC sessions start when initialized;
+single-shot/headless sessions start when the agent first emits an observation.
+Switching conversations emits the old session's end before the new start.
+Current end reasons are `shutdown`, `session_switch`, and `cwd_change`.
+`session_end` is emitted at most once per activation on these graceful paths.
+Switching models or clearing messages does not close the active conversation.
+Reloading extensions does not close the session or replay earlier events.
+
+Every compaction attempt emits a matching `post_compact`, including empty
+transcripts, failures, and cancellation. Status is `completed`, `failed`,
+`cancelled`, or `timed_out`. Post counts describe the resulting in-memory
+transcript; they do not assert that persistence succeeded. Token estimates
+count serialized text bytes divided by four, not exact provider usage or image
+tokens. The events do not let extensions modify the summary.
+
+Swarm events are emitted by the parent supervisor, including resumed tasks.
+`session_id` identifies the task's parent conversation, even if the active
+conversation later changes. `agent_id` survives resume; `agent_run_id` is fresh
+for each local runner invocation and pairs start with stop. `name` currently
+uses the agent ID. Stop statuses are `completed`, `failed`, `cancelled`, and
+`timed_out`. Merely loading detached agents from disk does not replay lifecycle
+events. Cancellation requests do not emit stop until the runner returns. On
+interactive shutdown zot waits up to two seconds for local runners before
+closing extensions; unresponsive runners may not produce a final notification.
+
+#### Ordering, delivery, and privacy
+
+For a normal client tool step, the observable sequence is:
+
+```text
+user_prompt_submit
+turn_start
+assistant_message / tool_call
+turn_end
+synchronous tool interception
+tool_confirmation_requested (when needed)
+permission_decision
+tool execution
+tool_result
+next turn_start (if continuing)
+```
+
+This preserves the existing meaning of `turn_end`: it ends the model response,
+not the tool batch. Multiple calls are announced before the batch executes;
+each client call then gets its own permission and result events. Retries,
+blocked turns, queued prompts, and concurrent swarm tasks can add or interleave
+events; do not assume a globally linear workflow from the example alone.
+
+Frames are serialized per extension, including notifications and interception
+requests. Notification enqueue does not wait for the subprocess. Each
+extension has a bounded outbound queue (256 frames or 16 MiB of queued bytes,
+plus one in-flight frame); overflow disconnects it rather than silently dropping
+an event and continuing. Synchronous writes are bounded to five seconds.
+Graceful shutdown attempts to drain queued frames, including `session_end`,
+before sending `shutdown`, within the shutdown grace period.
+
+Delivery is best-effort, not a durable or exactly-once audit log. There is no
+acknowledgement, replay, or crash recovery for notifications. A crash, forced
+termination, slow consumer, or broken pipe can prevent delivery. The protocol's
+4 MiB frame limit still applies. Slow event handlers can delay later
+interception requests, so extension handlers should hand lengthy work to their
+own bounded queue. Existing interception response and failure policies remain
+unchanged.
+
+Prompts, effective tool arguments, outputs, paths, and error text may contain
+secrets or private data. Only subscribe to content-bearing events you need.
+There is no automatic secret redaction; subscriptions are not an extension
+security sandbox. This surface is available where zot loads an extension
+manager (interactive, print/stream/JSON, RPC, and swarm-child modes). It does
+not add extension loading to other hosts or change the RPC client event schema.
 
 #### `event_intercept`
 

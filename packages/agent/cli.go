@@ -165,6 +165,19 @@ func fanoutAgentEvent(mgr *extensions.Manager, ev core.AgentEvent) {
 		return
 	}
 	switch e := ev.(type) {
+	case core.EvPromptSubmit:
+		mgr.EmitEvent(extproto.EventFromHost{Event: "user_prompt_submit", Text: e.Text, Queued: e.Queued, ImageCount: e.ImageCount})
+	case core.EvToolResult:
+		if e.Executed && e.Status == "blocked" {
+			mgr.EmitEvent(extproto.EventFromHost{Event: "permission_decision", ToolID: e.ID, ToolName: e.Name, Decision: "denied", Source: "policy", Stage: "tool_execution"})
+		}
+		mgr.EmitEvent(extproto.EventFromHost{Event: "tool_result", ToolID: e.ID, ToolName: e.Name, ToolArgs: e.Args, Status: e.Status, Executed: &e.Executed, Result: extensionEventResult(e.Result)})
+	case core.EvCompact:
+		event := extproto.EventFromHost{Event: e.Type(), CompactionID: e.ID, MessageCount: &e.MessageCount, TokenEstimate: &e.TokenEstimate, Status: e.Status}
+		if e.Err != nil {
+			event.Error = e.Err.Error()
+		}
+		mgr.EmitEvent(event)
 	case core.EvTurnStart:
 		mgr.EmitEvent(extproto.EventFromHost{Event: "turn_start", Step: e.Step})
 	case core.EvToolCall:
@@ -308,7 +321,6 @@ func setupNonInteractiveExtensions(ctx context.Context, args Args, r *Resolved, 
 	}
 	extMgr.WaitForReady(3 * time.Second)
 	r.MergeExtensionTools(&extToolAdapter{mgr: extMgr})
-	extMgr.EmitEvent(extproto.EventFromHost{Event: "session_start"})
 	return extMgr, func() { extMgr.Stop(2 * time.Second) }
 }
 
@@ -327,11 +339,13 @@ func wireNonInteractiveAgentExtHooks(ctx context.Context, ag *core.Agent, extMgr
 		return
 	}
 	wireBeforeAgentStart(ag, extMgr, "")
-	ag.BeforeToolExecute = func(call provider.ToolCallBlock) (bool, string, json.RawMessage) {
+	ag.BeforeToolExecuteContext = func(ctx context.Context, call provider.ToolCallBlock) (bool, string, json.RawMessage) {
 		res := extMgr.InterceptToolCall(ctx, call.ID, call.Name, call.Arguments)
 		if res.Block {
-			return false, res.Reason, nil
+			emitPermissionDecision(ctx, extMgr, call, core.ConfirmDecision{Source: "policy", Reason: res.Reason})
+			return false, res.Reason, res.ModifiedArgs
 		}
+		emitPermissionDecision(ctx, extMgr, call, core.ConfirmDecision{Allow: true, Source: "yolo"})
 		return true, "", res.ModifiedArgs
 	}
 	ag.BeforeTurn = func(step int) (bool, string) {
@@ -345,7 +359,7 @@ func wireNonInteractiveAgentExtHooks(ctx context.Context, ag *core.Agent, extMgr
 		}
 		return true, "", res.ReplaceText
 	}
-	ag.OnEvent = func(ev core.AgentEvent) { fanoutAgentEvent(extMgr, ev) }
+	wireLifecycleEvents(ag, extMgr)
 }
 
 type printStats struct {
@@ -709,8 +723,9 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 	// in this outer scope rather than scoping it tighter.
 	var swarmMgr *swarm.Swarm
 	swarmMgr = swarm.New(swarm.Config{
-		Root:     filepath.Join(ZotHome(), "swarm"),
-		RepoRoot: r.CWD,
+		Root:        filepath.Join(ZotHome(), "swarm"),
+		RepoRoot:    r.CWD,
+		OnLifecycle: func(e swarm.LifecycleEvent) { emitSwarmLifecycle(extMgr, e) },
 		ResolveCredential: func(ctx context.Context, providerID string) (swarm.Credential, error) {
 			if providerID == "ollama" {
 				return swarm.Credential{Value: "ollama", Method: "apikey"}, nil
@@ -781,13 +796,14 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 	wireAgentExt := func(resolved Resolved) *core.Agent {
 		a := resolved.NewAgent()
 		wireBeforeAgentStart(a, extMgr, resolved.Provider)
-		a.BeforeToolExecute = func(call provider.ToolCallBlock) (bool, string, json.RawMessage) {
+		a.BeforeToolExecuteContext = func(ctx context.Context, call provider.ToolCallBlock) (bool, string, json.RawMessage) {
 			// Guards run before confirmation because they may rewrite the
 			// arguments. The user must approve the effective call that will
 			// actually execute, not the model's original arguments.
 			r := extMgr.InterceptToolCall(ctx, call.ID, call.Name, call.Arguments)
 			if r.Block {
-				return false, r.Reason, nil
+				emitPermissionDecision(ctx, extMgr, call, core.ConfirmDecision{Source: "policy", Reason: r.Reason})
+				return false, r.Reason, r.ModifiedArgs
 			}
 			effectiveArgs := call.Arguments
 			if len(r.ModifiedArgs) > 0 && json.Valid(r.ModifiedArgs) {
@@ -799,7 +815,8 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 					if previewer, ok := tool.(core.ToolPreviewer); ok {
 						preview, err := previewer.Preview(ctx, effectiveArgs)
 						if err != nil {
-							return false, err.Error(), nil
+							emitPermissionDecision(ctx, extMgr, call, core.ConfirmDecision{Source: "policy", Reason: err.Error()})
+							return false, err.Error(), effectiveArgs
 						}
 						for _, block := range preview.Content {
 							if text, ok := block.(provider.TextBlock); ok {
@@ -811,15 +828,18 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 						}
 					}
 				}
-				ok, reason, _ := confirmGate.CheckToolCall(core.ToolCallConfirmation{
+				decision := confirmGate.DecideToolCall(core.ToolCallConfirmation{
 					ID:      call.ID,
 					Name:    call.Name,
 					Summary: core.BuildPreview(effectiveArgs, 120),
 					Content: content.String(),
 				})
-				if !ok {
-					return false, reason, nil
+				emitPermissionDecision(ctx, extMgr, call, decision)
+				if !decision.Allow {
+					return false, decision.Reason, effectiveArgs
 				}
+			} else {
+				emitPermissionDecision(ctx, extMgr, call, core.ConfirmDecision{Allow: true, Source: "yolo"})
 			}
 			return true, "", r.ModifiedArgs
 		}
@@ -834,7 +854,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 			}
 			return true, "", r.ReplaceText
 		}
-		a.OnEvent = func(ev core.AgentEvent) { fanoutAgentEvent(extMgr, ev) }
+		wireLifecycleEvents(a, extMgr)
 		return a
 	}
 
@@ -914,9 +934,6 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		refreshAgentToolsAndPrompt(args, sharedSandbox, extToolAdapter, current, injectSwarmSpawn)
 	})
 
-	// Fire session_start once we know the manager's running.
-	extMgr.EmitEvent(extproto.EventFromHost{Event: "session_start"})
-
 	var sess *core.Session
 	var sessBaselineMsgs int // messages already on disk when current session opened
 	// persistMu guards sess + sessBaselineMsgs against concurrent access
@@ -931,6 +948,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 			sessBaselineMsgs = len(ag.Messages())
 		}
 	}
+	startExtensionSession(extMgr, ag, r.CWD, "")
 	defer func() {
 		persistMu.Lock()
 		defer persistMu.Unlock()
@@ -1042,6 +1060,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		sess = newSess
 		currentAg.SetMessages(msgs)
 		bindAgentSession(currentAg, sess)
+		startExtensionSession(extMgr, currentAg, r.CWD, "session_switch")
 		if cum, last, uerr := core.SessionUsageDetail(path); uerr == nil {
 			currentAg.SeedCost(cum)
 			currentAg.SeedLastTurnUsage(last)
@@ -1133,6 +1152,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		}
 		sessBaselineMsgs = 0
 		persistMu.Unlock()
+		extMgr.EndSession("cwd_change")
 
 		// Mutate captured state so subsequent agent rebuilds and
 		// session opens see the new cwd.
@@ -1178,6 +1198,8 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 			bindAgentSession(newAg, newSess)
 		}
 
+		startExtensionSession(extMgr, newAg, absPath, "cwd_change")
+
 		// Push the new state into the running Interactive.
 		if iv != nil {
 			startupPaths := instructionContextPaths(loadAgentsContext(absPath, ZotHome()))
@@ -1185,8 +1207,9 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		}
 
 		// Re-scope the swarm dashboard to the new session.
-		if swarmMgr != nil && sess != nil {
-			swarmMgr.SetActiveSession(sess.ID)
+		if swarmMgr != nil {
+			sessionID, _ := extMgr.SessionContext()
+			swarmMgr.SetActiveSession(sessionID)
 		}
 		return nil
 	}
@@ -1261,12 +1284,15 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 	// shows agents this session spawned (and any pre-upgrade unscoped
 	// agents — see SnapshotAll docs). Updated again whenever the
 	// user swaps sessions via loadSession below.
-	if sess != nil {
-		swarmMgr.SetActiveSession(sess.ID)
-	}
+	sessionID, _ := extMgr.SessionContext()
+	swarmMgr.SetActiveSession(sessionID)
 	// Best-effort shutdown on interactive exit: stop all running
 	// agents so they don't outlive their parent zot.
-	defer swarmMgr.StopAll()
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		swarmMgr.Shutdown(shutdownCtx)
+	}()
 
 	var startupSkills []*skills.Skill
 	if r.SkillTool != nil {

@@ -169,6 +169,14 @@ type Manager struct {
 	// by the host so it can rebuild the agent's tool registry with
 	// the freshly-registered extension tools.
 	onReload func()
+
+	// lifecycleMu serializes session boundaries and notification enqueue order.
+	lifecycleMu   sync.Mutex
+	sessionID     string
+	sessionCWD    string
+	sequence      uint64
+	sessionClosed bool
+	stopping      bool
 }
 
 // New constructs an empty Manager. Call Discover to populate it from
@@ -723,6 +731,7 @@ func (m *Manager) spawn(ctx context.Context, ext *Extension) error {
 	}
 	started = true
 	ext.cmd = cmd
+	stdin = newOrderedPipe(stdin)
 	ext.stdin = stdin
 	ext.stdout = stdout
 
@@ -1238,7 +1247,7 @@ func (m *Manager) InvokeTool(ctx context.Context, name string, args json.RawMess
 		ext.mu.Lock()
 		delete(ext.pendingTool, id)
 		ext.mu.Unlock()
-		return extproto.ToolResultFromExt{}, fmt.Errorf("timeout waiting for %s/%s", ext.Manifest.Name, name)
+		return extproto.ToolResultFromExt{}, fmt.Errorf("timeout waiting for %s/%s: %w", ext.Manifest.Name, name, context.DeadlineExceeded)
 	case <-ctx.Done():
 		ext.mu.Lock()
 		delete(ext.pendingTool, id)
@@ -1341,6 +1350,7 @@ func (m *Manager) SendPanelClose(extName, panelID string) error {
 }
 
 func (m *Manager) Stop(gracePeriod time.Duration) {
+	m.stopLifecycle()
 	m.mu.RLock()
 	exts := make([]*Extension, 0, len(m.ext))
 	for _, e := range m.ext {
@@ -1351,17 +1361,21 @@ func (m *Manager) Stop(gracePeriod time.Duration) {
 }
 
 func stopExtensions(exts []*Extension, gracePeriod time.Duration) {
+	deadline := time.Now().Add(gracePeriod)
 	for _, ext := range exts {
 		if ext.stdin == nil {
 			continue
 		}
 		if frame, err := extproto.Encode(extproto.ShutdownFromHost{Type: "shutdown"}); err == nil {
-			_, _ = ext.stdin.Write(frame)
+			if pipe, ok := ext.stdin.(*orderedPipe); ok {
+				_, _ = pipe.writeTimeout(frame, time.Until(deadline))
+			} else {
+				_, _ = ext.stdin.Write(frame)
+			}
 		}
 		_ = ext.stdin.Close()
 	}
 
-	deadline := time.Now().Add(gracePeriod)
 	for _, ext := range exts {
 		if ext.cmd == nil {
 			if ext.logFile != nil {

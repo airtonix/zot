@@ -1,9 +1,12 @@
 package tools
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
+
+	"github.com/patriceckhart/zot/packages/core"
 )
 
 // PermissionSet is the local-runtime permission contract for a packaged .zot agent.
@@ -55,7 +58,8 @@ func (s *Sandbox) SetPermissions(p *PermissionSet) {
 	s.Permissions = p
 }
 
-func (s *Sandbox) CheckReadPath(path string) error {
+func (s *Sandbox) CheckReadPath(path string) (err error) {
+	defer markPolicyError(&err)
 	if err := s.CheckPath(path); err != nil {
 		return err
 	}
@@ -68,7 +72,8 @@ func (s *Sandbox) CheckReadPath(path string) error {
 	return checkScopedPath("read", path, s.Permissions.FS.Read)
 }
 
-func (s *Sandbox) CheckWritePath(path string) error {
+func (s *Sandbox) CheckWritePath(path string) (err error) {
+	defer markPolicyError(&err)
 	if err := s.CheckPath(path); err != nil {
 		return err
 	}
@@ -98,7 +103,8 @@ func checkScopedPath(op, path string, scopes []string) error {
 	return fmt.Errorf("permission denied: %s %q is outside declared scopes", op, path)
 }
 
-func (s *Sandbox) CheckBashPermission(cmd string) error {
+func (s *Sandbox) CheckBashPermission(cmd string) (err error) {
+	defer markPolicyError(&err)
 	if s == nil || s.Permissions == nil {
 		return nil
 	}
@@ -133,6 +139,15 @@ func (s *Sandbox) CheckBashPermission(cmd string) error {
 		return nil
 	default:
 		return fmt.Errorf("permission denied: unsupported bash mode %q", mode)
+	}
+}
+
+// Keep the original error text and errors.Is identity while marking denials
+// for lifecycle observers. Nested jail and manifest checks wrap only once.
+func markPolicyError(err *error) {
+	var policy *core.ToolPolicyError
+	if *err != nil && !errors.As(*err, &policy) {
+		*err = &core.ToolPolicyError{Err: *err}
 	}
 }
 

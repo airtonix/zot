@@ -10,14 +10,38 @@ import (
 )
 
 // EmitEvent fires a one-way lifecycle event to every extension that
-// subscribed to it via SubscribeFromExt.events. Non-blocking: each
-// extension's pipe write happens on a per-call goroutine so a slow
-// extension can't stall the agent loop.
+// subscribed to it via SubscribeFromExt.events. Notification enqueue is
+// ordered and non-blocking; a slow consumer is disconnected on overflow.
 //
 // Event names are documented on extproto.EventFromHost. Unknown event
 // names are still routed (subscribers can use any string they want).
 func (m *Manager) EmitEvent(ev extproto.EventFromHost) {
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
+	if m.stopping {
+		return
+	}
+	m.emitEventLocked(ev)
+}
+
+func (m *Manager) emitEventLocked(ev extproto.EventFromHost) {
 	ev.Type = "event"
+	m.sequence++
+	ev.Sequence = m.sequence
+	if ev.SessionID == "" {
+		ev.SessionID = m.sessionID
+	}
+	if ev.CWD == "" {
+		ev.CWD = m.sessionCWD
+	}
+	if ev.CWD == "" {
+		ev.CWD = m.cwd
+	}
+	// A malformed model call must still have an observable terminal result.
+	if len(ev.ToolArgs) > 0 && !json.Valid(ev.ToolArgs) {
+		ev.ToolArgsRaw = string(ev.ToolArgs)
+		ev.ToolArgs = nil
+	}
 	frame, err := extproto.Encode(ev)
 	if err != nil {
 		return
@@ -35,14 +59,19 @@ func (m *Manager) EmitEvent(ev extproto.EventFromHost) {
 	m.mu.RUnlock()
 
 	for _, ext := range subs {
-		go func(ext *Extension) {
-			defer func() {
-				// A panicking write to a closed pipe shouldn't kill
-				// the calling goroutine.
-				_ = recover()
-			}()
-			_, _ = ext.stdin.Write(frame)
-		}(ext)
+		if ext.stdin == nil {
+			continue
+		}
+		var err error
+		if pipe, ok := ext.stdin.(*orderedPipe); ok {
+			err = pipe.enqueue(frame, nil)
+		} else {
+			// Tests may provide a synchronous in-memory writer.
+			_, err = ext.stdin.Write(frame)
+		}
+		if err != nil && ext.logFile != nil {
+			fmt.Fprintf(ext.logFile, "[zot] lifecycle delivery failed: %v\n", err)
+		}
 	}
 }
 
@@ -81,6 +110,7 @@ func (m *Manager) InterceptToolCall(ctx context.Context, toolID, toolName string
 			ToolArgs: current,
 		})
 		if r.Block {
+			r.ModifiedArgs = current
 			return r
 		}
 		if len(r.ModifiedArgs) > 0 && json.Valid(r.ModifiedArgs) {

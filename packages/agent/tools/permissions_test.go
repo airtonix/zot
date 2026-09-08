@@ -1,9 +1,12 @@
 package tools
 
 import (
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/patriceckhart/zot/packages/core"
 )
 
 func TestPermissionSetEmptyScopesDenyAccess(t *testing.T) {
@@ -81,5 +84,28 @@ func TestBashModeAskAllows(t *testing.T) {
 	s.SetPermissions(&p)
 	if err := s.CheckBashPermission("rm -rf /tmp/x"); err != nil {
 		t.Fatalf("ask mode rejected command: %v", err)
+	}
+}
+
+func TestPolicyRefusalsCarryTypedOutcomes(t *testing.T) {
+	s := NewSandbox(t.TempDir())
+	s.SetPermissions(&PermissionSet{})
+	for _, err := range []error{
+		s.CheckReadPath(filepath.Join(s.Root, "file")),
+		s.CheckWritePath(filepath.Join(s.Root, "file")),
+		s.CheckBashPermission("echo ok"),
+		(&PowerShellTool{Sandbox: s}).checkPermission("Write-Output ok"),
+	} {
+		var policy *core.ToolPolicyError
+		if !errors.As(err, &policy) {
+			t.Fatalf("untyped policy refusal: %v", err)
+		}
+	}
+	s.Lock()
+	for _, err := range []error{s.CheckPath(t.TempDir()), s.CheckCommand("sudo true"), (&PowerShellTool{Sandbox: s}).checkPermission("")} {
+		var policy *core.ToolPolicyError
+		if !errors.As(err, &policy) {
+			t.Fatalf("untyped jail refusal: %v", err)
+		}
 	}
 }

@@ -20,7 +20,10 @@ func (m *Manager) InterceptBeforeAgentStart(ctx context.Context, ev extproto.Eve
 		current = *ev.SystemPrompt
 	}
 	ev.Event = "before_agent_start"
-	ev.CWD = m.cwd
+	_, ev.CWD = m.SessionContext()
+	if ev.CWD == "" {
+		ev.CWD = m.cwd
+	}
 	if ev.Provider == "" {
 		ev.Provider = m.provider
 	}
