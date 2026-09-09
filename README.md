@@ -814,6 +814,25 @@ Opening `/model` refreshes the router and lists every loaded model under provide
 
 A model installed through Ollama is kept in Ollama's internal storage and is not automatically available as a llama.cpp GGUF file. Download a GGUF copy through `/llama` or place GGUF files in `~/llama-models`, then restart the router so it discovers files added manually.
 
+## Child process environment
+
+Scripts and shell commands launched by zot inherit runtime metadata:
+
+| Variable | Meaning |
+| --- | --- |
+| `AI_AGENT` | Generic agent marker, set to `zot` |
+| `ZOT_AGENT` | Zot-specific process marker, set to `1` |
+| `ZOT_CHILD_SESSION` | Set to `1` for commands launched by a zot tool |
+| `ZOT_SESSION_ID` | Current session ID, when session persistence is enabled |
+| `ZOT_SESSION_FILE` | Absolute path to the current session file, when persisted |
+| `ZOT_PROVIDER` | Current model provider |
+| `ZOT_MODEL` | Current model ID |
+| `ZOT_REASONING_LEVEL` | Current reasoning level, when configured |
+
+These values contain no credentials. Use `ZOT_AGENT` or `AI_AGENT` to distinguish execution inside zot from a standalone invocation; use the session and model values for diagnostics or attribution.
+
+Interactive shell commands receive model metadata even with `--no-session`; only session ID and file are omitted. Newly launched commands reflect session switches, working-directory changes, and reasoning-level changes. Turning reasoning off removes `ZOT_REASONING_LEVEL`. Already-running subprocesses retain the environment they inherited at launch.
+
 ## Inline images
 
 When a tool returns an image (for example `read` on a PNG), zot renders it inline on terminals that support it: **Ghostty**, **Kitty**, **iTerm2**, **WezTerm**. On other terminals you see a text placeholder with MIME type, pixel dimensions, and byte size. Control with the `ZOT_INLINE_IMAGES` env var:

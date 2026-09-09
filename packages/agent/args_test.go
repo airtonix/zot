@@ -98,6 +98,21 @@ func TestRunHelpHelperProcess(t *testing.T) {
 	os.Exit(0)
 }
 
+func TestRunSetsAgentEnvironment(t *testing.T) {
+	t.Setenv("ZOT_AGENT", "")
+	t.Setenv("AI_AGENT", "")
+	isolateSessionEnvironment(t)
+	if err := Run([]string{"--help"}, "test"); err != nil {
+		t.Fatalf("Run returned %v", err)
+	}
+	if got := os.Getenv("ZOT_AGENT"); got != "1" {
+		t.Fatalf("ZOT_AGENT = %q, want %q", got, "1")
+	}
+	if got := os.Getenv("AI_AGENT"); got != "zot" {
+		t.Fatalf("AI_AGENT = %q, want %q", got, "zot")
+	}
+}
+
 func TestHelpOutputStreams(t *testing.T) {
 	run := func(args string) (stdout, stderr string, err error) {
 		t.Helper()

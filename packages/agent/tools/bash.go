@@ -81,7 +81,9 @@ func executeShell(ctx context.Context, raw json.RawMessage, progress func(string
 		return core.ToolResult{}, err
 	}
 	cmd.Dir = cwd
-	cmd.Env = os.Environ()
+	// Mark direct tool subprocesses separately from the zot process itself.
+	// Descendants inherit this marker as usual.
+	cmd.Env = append(os.Environ(), "ZOT_CHILD_SESSION=1")
 	// Bound output draining if descendants retain handles after cancellation.
 	cmd.WaitDelay = 2 * time.Second
 	setProcessGroup(cmd)

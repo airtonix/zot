@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/patriceckhart/zot/packages/core"
 	"github.com/patriceckhart/zot/packages/tui"
 )
 
@@ -78,6 +79,22 @@ func TestReasoningCommandOpensDirectSelector(t *testing.T) {
 	act = i.settingsDialog.HandleKey(tui.Key{Kind: tui.KeyEsc})
 	if !act.Close || i.settingsDialog.Active() {
 		t.Fatal("escape did not close the direct reasoning selector")
+	}
+}
+
+func TestReasoningSettingNotifiesRuntime(t *testing.T) {
+	i := &Interactive{agent: &core.Agent{Reasoning: "high"}}
+	var levels []string
+	i.cfg.OnReasoningChanged = func(level string) {
+		if i.agent.Reasoning != level {
+			t.Fatalf("callback ran before agent update: got %q, want %q", i.agent.Reasoning, level)
+		}
+		levels = append(levels, level)
+	}
+	i.applyReasoningSetting("medium")
+	i.applyReasoningSetting("off")
+	if !slices.Equal(levels, []string{"medium", ""}) {
+		t.Fatalf("reasoning notifications = %q", levels)
 	}
 }
 
