@@ -160,6 +160,37 @@ func TestDiscoverReportsExitStatusAndLogWhenExtensionExitsBeforeHello(t *testing
 	}
 }
 
+func TestDiscoverReportsMissingRuntimeWhenExtensionCannotStart(t *testing.T) {
+	tmp := t.TempDir()
+	extDir := filepath.Join(tmp, "extensions", "missing-runtime")
+	if err := os.MkdirAll(extDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(extDir, "extension.json"), []byte(`{"name":"missing-runtime","exec":"python3","language":"python"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Isolate PATH so this tests a missing language runtime rather than
+	// relying on a made-up executable name that could theoretically exist.
+	t.Setenv("PATH", filepath.Join(tmp, "empty-bin"))
+	mgr := New(tmp, "", "0.0.0-test", "", "", nil)
+	errs := mgr.Discover(context.Background())
+	if len(errs) != 1 {
+		t.Fatalf("discover errors = %v, want one", errs)
+	}
+	got := errs[0].Error()
+	for _, want := range []string{
+		`Extension missing-runtime failed to start.`,
+		`exec: "python3"`,
+		`declared language: "python"`,
+		"executable file not found",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("error = %q, want it to contain %q", got, want)
+		}
+	}
+}
+
 func TestDiscoverReportsSignalWhenExtensionExitsBeforeHello(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("mock extension uses Unix signals; skip on windows")

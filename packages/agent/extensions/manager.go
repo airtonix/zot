@@ -229,7 +229,7 @@ func (m *Manager) Discover(ctx context.Context) []error {
 		go func(extDir string) {
 			defer wg.Done()
 			if err := m.loadOne(ctx, extDir); err != nil {
-				errCh <- fmt.Errorf("%s: %w", extDir, err)
+				errCh <- err
 			}
 		}(j.dir)
 	}
@@ -506,7 +506,7 @@ func (m *Manager) LoadExplicit(ctx context.Context, paths []string) []error {
 		go func(extDir string) {
 			defer wg.Done()
 			if err := m.loadOne(ctx, extDir); err != nil {
-				errCh <- fmt.Errorf("%s: %w", extDir, err)
+				errCh <- err
 			}
 		}(abs)
 	}
@@ -727,7 +727,11 @@ func (m *Manager) spawn(ctx context.Context, ext *Extension) error {
 		return fmt.Errorf("stdout pipe (stderr log: %s): %w", logPath, err)
 	}
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("spawn (stderr log: %s): %w", logPath, err)
+		language := ""
+		if ext.Manifest.Language != "" {
+			language = fmt.Sprintf(" (declared language: %q)", ext.Manifest.Language)
+		}
+		return fmt.Errorf("Extension %s failed to start.\n\n  exec: %q%s\n  error: %w\n  extension directory: %s\n  stderr log: %s", ext.Manifest.Name, ext.Manifest.Exec, language, err, ext.Dir, logPath)
 	}
 	started = true
 	ext.cmd = cmd
