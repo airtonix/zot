@@ -952,7 +952,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 	// (run on the TUI goroutine). Without this, a /sessions swap that
 	// races with a finishing turn could double-write or lose messages.
 	var persistMu sync.Mutex
-	if !args.NoSess && ag != nil {
+	if ag != nil {
 		sess, _ = openOrCreateSession(args, r, ag, version)
 		if ag != nil {
 			sessBaselineMsgs = len(ag.Messages())
@@ -1209,6 +1209,10 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 			bindAgentSession(newAg, newSess)
 		}
 
+		r.Provider = newProvider
+		r.Model = newModel
+		r.Reasoning = newAg.Reasoning
+		setZotSessionEnvironment(r, sess)
 		startExtensionSession(extMgr, newAg, absPath, "cwd_change")
 
 		// Push the new state into the running Interactive.
@@ -1468,6 +1472,10 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		},
 		NoYolo:      args.NoYolo,
 		ConfirmGate: confirmGate,
+		OnReasoningChanged: func(level string) {
+			r.Reasoning = level
+			setZotSessionEnvironment(r, sess)
+		},
 		PersistModel: func(providerName, model string) {
 			// Update config.json so next launch uses the same pick.
 			cfg, _ := LoadConfig()

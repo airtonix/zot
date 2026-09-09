@@ -100,6 +100,8 @@ func TestRunHelpHelperProcess(t *testing.T) {
 
 func TestRunSetsAgentEnvironment(t *testing.T) {
 	t.Setenv("ZOT_AGENT", "")
+	t.Setenv("AI_AGENT", "")
+	isolateSessionEnvironment(t)
 	if err := Run([]string{"--help"}, "test"); err != nil {
 		t.Fatalf("Run returned %v", err)
 	}

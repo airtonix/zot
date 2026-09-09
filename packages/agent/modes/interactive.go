@@ -269,6 +269,9 @@ type InteractiveConfig struct {
 	// write a new meta row so resume picks up the same model.
 	PersistModel func(providerName, model string)
 
+	// OnReasoningChanged reports the normalized level after updating the live agent.
+	OnReasoningChanged func(level string)
+
 	OnAssistant  func(m provider.Message)
 	OnToolResult func(id string, r core.ToolResult)
 
@@ -4196,6 +4199,9 @@ func (i *Interactive) applyReasoningSetting(level string) {
 	i.statusOK = "reasoning level " + label
 	i.statusErr = ""
 	i.mu.Unlock()
+	if i.cfg.OnReasoningChanged != nil {
+		i.cfg.OnReasoningChanged(level)
+	}
 }
 
 // buildStudyPrompt returns the canned prompt the /study command
