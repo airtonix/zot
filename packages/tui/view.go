@@ -319,17 +319,17 @@ func (v *View) renderErr(width int) []string {
 	if wrapWidth < 8 {
 		wrapWidth = 8
 	}
-	wrapped := wrapLine(v.Err, wrapWidth, "")
-	if len(wrapped) == 0 {
-		wrapped = []string{""}
-	}
-	out := make([]string, 0, len(wrapped))
-	for idx, line := range wrapped {
-		prefix := marker
-		if idx > 0 {
-			prefix = indent
+	var out []string
+	// Each returned row must represent one terminal line, including when
+	// the error contains explicit newlines or blank separator lines.
+	for _, paragraph := range strings.Split(v.Err, "\n") {
+		for _, line := range wrapLine(paragraph, wrapWidth, "") {
+			prefix := indent
+			if len(out) == 0 {
+				prefix = marker
+			}
+			out = append(out, v.Theme.FG256(v.Theme.Error, prefix+line))
 		}
-		out = append(out, v.Theme.FG256(v.Theme.Error, prefix+line))
 	}
 	return out
 }
