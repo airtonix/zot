@@ -562,6 +562,7 @@ type Interactive struct {
 	pendingFork bool
 	suggest     *slashSuggester
 	fileSuggest *fileSuggester
+	pathSuggest *pathChoicePopup
 	spin        *spinner
 
 	// parkedTurn is the 1-based turn number the viewport is currently
@@ -717,6 +718,7 @@ func NewInteractive(cfg InteractiveConfig) *Interactive {
 		extPanel:          newExtPanelDialog(),
 		suggest:           newSlashSuggester(),
 		fileSuggest:       newFileSuggester(),
+		pathSuggest:       newPathChoicePopup(),
 		spin:              newSpinner(cfg.Theme),
 		inputHistoryIndex: -1,
 		reloadErrors:      append([]string(nil), cfg.StartupExtensionErrors...),
@@ -1458,6 +1460,8 @@ func (i *Interactive) redraw() {
 		suggest = i.suggest.Render(currentInput, i.cfg.Theme, cols)
 	} else if mainInputFocused && i.fileSuggest.Active(currentInput) {
 		suggest = i.fileSuggest.Render(currentInput, i.cfg.Theme, cols)
+	} else if mainInputFocused && i.pathSuggest.Active(currentInput) {
+		suggest = i.pathSuggest.Render(i.cfg.Theme, cols)
 	}
 
 	// Detect overlay close (any dialog or slash/file suggestion popup
@@ -2618,7 +2622,7 @@ func (i *Interactive) handleKey(ctx context.Context, k tui.Key) (done bool) {
 		// notes should dismiss on Esc before we even consider the
 		// turn. Without these guards, a casual Esc press after
 		// running /help on a busy turn rips the turn away.
-		if i.suggest.Active(i.ed.Value()) || i.fileSuggest.Active(i.ed.Value()) {
+		if i.suggest.Active(i.ed.Value()) || i.fileSuggest.Active(i.ed.Value()) || i.pathSuggest.Active(i.ed.Value()) {
 			break
 		}
 		i.mu.Lock()
@@ -2694,7 +2698,7 @@ func (i *Interactive) handleKey(ctx context.Context, k tui.Key) (done bool) {
 		// At the editor's top edge, plain Up can browse input history when
 		// history browsing is safe/active; otherwise it falls back to chat
 		// scrolling, preserving the old single-line scroll behavior.
-		if !i.suggest.Active(i.ed.Value()) && !i.fileSuggest.Active(i.ed.Value()) {
+		if !i.suggest.Active(i.ed.Value()) && !i.fileSuggest.Active(i.ed.Value()) && !i.pathSuggest.Active(i.ed.Value()) {
 			if i.ed.MoveVertical(-1) {
 				i.invalidate()
 				return false
@@ -2706,7 +2710,7 @@ func (i *Interactive) handleKey(ctx context.Context, k tui.Key) (done bool) {
 			return false
 		}
 	case tui.KeyDown:
-		if !i.suggest.Active(i.ed.Value()) && !i.fileSuggest.Active(i.ed.Value()) {
+		if !i.suggest.Active(i.ed.Value()) && !i.fileSuggest.Active(i.ed.Value()) && !i.pathSuggest.Active(i.ed.Value()) {
 			if i.ed.MoveVertical(+1) {
 				i.invalidate()
 				return false
@@ -2823,6 +2827,30 @@ func (i *Interactive) handleKey(ctx context.Context, k tui.Key) (done bool) {
 		}
 	}
 
+	// Repeated-Tab path choices use the same transient popup interaction as
+	// the slash and @ pickers. Any ordinary editing key invalidates the
+	// snapshot and falls through so the editor can update the token.
+	if i.pathSuggest.Active(i.ed.Value()) {
+		switch k.Kind {
+		case tui.KeyUp:
+			i.pathSuggest.Up()
+			return false
+		case tui.KeyDown:
+			i.pathSuggest.Down()
+			return false
+		case tui.KeyTab, tui.KeyEnter:
+			i.pathSuggest.Select(i.ed)
+			i.invalidate()
+			return false
+		case tui.KeyEsc:
+			i.pathSuggest.Reset()
+			i.invalidate()
+			return false
+		default:
+			i.pathSuggest.Reset()
+		}
+	}
+
 	// Tab-complete a path token in the editor when no popup is open.
 	// Recognises tokens that look like paths (start with ~, /, ./, ../
 	// or contain a slash); shell-style completion expands ~, lists the
@@ -2859,6 +2887,7 @@ func (i *Interactive) handleKey(ctx context.Context, k tui.Key) (done bool) {
 		i.inputHistoryIndex = -1
 		i.suggest.Reset()
 		i.fileSuggest.Reset()
+		i.pathSuggest.Reset()
 
 		if cmd, ok := shellEscapeCommand(text); ok {
 			i.startShellEscape(ctx, cmd)
@@ -4410,6 +4439,115 @@ func buildStudyPrompt(arg, cwd string) string {
 	return "Read and understand everything in the directory " + display + "."
 }
 
+type pathCompletionEntry struct {
+	name  string
+	isDir bool
+}
+
+// pathCompletionResult contains the filesystem matches for the trailing
+// path token in an editor value. Keeping the token offsets alongside the
+// matches lets the interactive popup replace only the path, preserving any
+// prompt text before it.
+type pathCompletionResult struct {
+	tokenStart    int
+	token         string
+	displayParent string
+	basePrefix    string
+	entries       []pathCompletionEntry
+}
+
+func (p pathCompletionResult) showChoices() bool {
+	return len(p.entries) > 1 && longestCommonPrefix(pathEntryNames(p.entries)) == p.basePrefix
+}
+
+func pathEntryNames(entries []pathCompletionEntry) []string {
+	names := make([]string, len(entries))
+	for i, entry := range entries {
+		names[i] = entry.name
+	}
+	return names
+}
+
+// pathCompletionForInput finds the filesystem matches for the path-like
+// token immediately before the cursor. The cursor is at the end of the
+// editor value for all current callers, so the trailing non-whitespace run
+// is the token to complete.
+func pathCompletionForInput(input, cwd string) (pathCompletionResult, bool) {
+	result := pathCompletionResult{}
+	start := len(input)
+	for start > 0 {
+		r := input[start-1]
+		if r == ' ' || r == '\t' || r == '\n' {
+			break
+		}
+		start--
+	}
+	token := input[start:]
+	if token == "" || !looksLikePathToken(token) {
+		return result, false
+	}
+	result.tokenStart = start
+	result.token = token
+
+	parentAbs, basePrefix, displayParent, ok := resolvePathTabToken(token, cwd)
+	if !ok {
+		return result, true
+	}
+	result.displayParent = displayParent
+	result.basePrefix = basePrefix
+	entries, err := os.ReadDir(parentAbs)
+	if err != nil {
+		return result, true
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasPrefix(name, basePrefix) {
+			continue
+		}
+		// Hide dotfiles unless the user explicitly typed a leading dot,
+		// mirroring bash's default behaviour.
+		if strings.HasPrefix(name, ".") && !strings.HasPrefix(basePrefix, ".") {
+			continue
+		}
+		result.entries = append(result.entries, pathCompletionEntry{name: name, isDir: entry.IsDir()})
+	}
+	return result, true
+}
+
+// applyPathCompletion applies the ordinary shell-style completion. It
+// returns false when there are no matches or when the input is already at
+// the deepest ambiguous prefix; the caller can then decide whether to show
+// a choice popup for that second-Tab case.
+func (p pathCompletionResult) applyPathCompletion(ed *tui.Editor) bool {
+	if ed == nil || len(p.entries) == 0 {
+		return false
+	}
+	var completed string
+	completedIsDir := false
+	if len(p.entries) == 1 {
+		completed = p.entries[0].name
+		completedIsDir = p.entries[0].isDir
+	} else {
+		completed = longestCommonPrefix(pathEntryNames(p.entries))
+		if completed == p.basePrefix {
+			return false
+		}
+	}
+
+	// Build the replacement token in the same display form the user
+	// typed (preserve ~ vs absolute vs relative).
+	newToken := p.displayParent + completed
+	if len(p.entries) == 1 && completedIsDir {
+		newToken += "/"
+	}
+	value := ed.Value()
+	if p.tokenStart < 0 || p.tokenStart > len(value) {
+		return false
+	}
+	ed.SetValue(value[:p.tokenStart] + newToken)
+	return true
+}
+
 // tryPathTabCompleteEditor looks at ed's current value, finds the
 // path-like token immediately before the cursor (the cursor is always
 // at the end of the buffer after a keystroke, so "before the cursor"
@@ -4437,85 +4575,35 @@ func tryPathTabCompleteEditor(ed *tui.Editor, cwd string) bool {
 	if ed == nil {
 		return false
 	}
-	val := ed.Value()
-	// Find the trailing run of non-whitespace.
-	start := len(val)
-	for start > 0 {
-		r := val[start-1]
-		if r == ' ' || r == '\t' || r == '\n' {
-			break
-		}
-		start--
-	}
-	token := val[start:]
-	if token == "" {
-		return false
-	}
-	if !looksLikePathToken(token) {
-		return false
-	}
-
-	// Resolve the absolute parent directory + base prefix to match.
-	parentAbs, basePrefix, displayParent, ok := resolvePathTabToken(token, cwd)
+	result, ok := pathCompletionForInput(ed.Value(), cwd)
 	if !ok {
-		return true
+		return false
 	}
-	entries, err := os.ReadDir(parentAbs)
-	if err != nil {
-		return true
-	}
-	var names []string
-	var isDir []bool
-	for _, e := range entries {
-		name := e.Name()
-		if !strings.HasPrefix(name, basePrefix) {
-			continue
-		}
-		// Hide dotfiles unless the user explicitly typed a leading dot,
-		// mirroring bash's default behaviour.
-		if strings.HasPrefix(name, ".") && !strings.HasPrefix(basePrefix, ".") {
-			continue
-		}
-		names = append(names, name)
-		isDir = append(isDir, e.IsDir())
-	}
-	if len(names) == 0 {
-		return true
-	}
-
-	var completed string
-	var completedIsDir bool
-	if len(names) == 1 {
-		completed = names[0]
-		completedIsDir = isDir[0]
-	} else {
-		completed = longestCommonPrefix(names)
-		if completed == basePrefix {
-			// Already at the deepest unambiguous prefix; nothing to add.
-			return true
-		}
-	}
-
-	// Build the replacement token in the same display form the user
-	// typed (preserve ~ vs absolute vs relative).
-	newToken := displayParent + completed
-	if len(names) == 1 && completedIsDir {
-		newToken += "/"
-	}
-
-	ed.SetValue(val[:start] + newToken)
+	result.applyPathCompletion(ed)
 	return true
 }
 
-// tryPathTabComplete is the Interactive-bound convenience wrapper.
-// It calls the free helper against the main editor and invalidates
-// the frame on a successful rewrite.
+// tryPathTabComplete is the Interactive-bound convenience wrapper. It keeps
+// the main editor's repeated-Tab choice popup in sync with the same path
+// completion result used by the embedded dialog editors.
 func (i *Interactive) tryPathTabComplete() bool {
-	if tryPathTabCompleteEditor(i.ed, i.cfg.CWD) {
+	if i.pathSuggest == nil {
+		i.pathSuggest = newPathChoicePopup()
+	}
+	result, ok := pathCompletionForInput(i.ed.Value(), i.cfg.CWD)
+	if !ok {
+		i.pathSuggest.Reset()
+		return false
+	}
+	if result.showChoices() {
+		i.pathSuggest.Open(result)
 		i.invalidate()
 		return true
 	}
-	return false
+	i.pathSuggest.Reset()
+	result.applyPathCompletion(i.ed)
+	i.invalidate()
+	return true
 }
 
 // looksLikePathToken reports whether tok is shaped like a filesystem
