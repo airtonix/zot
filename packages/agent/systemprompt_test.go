@@ -30,6 +30,26 @@ func TestBuildSystemPromptCustomOmitsBuiltInDocs(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPromptPlatform(t *testing.T) {
+	for _, tc := range []struct {
+		goos      string
+		wantHint  bool
+		wantLabel string
+	}{
+		{"windows", true, "Platform: windows/amd64"},
+		{"linux", false, "Platform: linux/amd64"},
+		{"darwin", false, "Platform: darwin/amd64"},
+	} {
+		got := BuildSystemPrompt(SystemPromptOpts{CWD: "/w", GOOS: tc.goos, GOARCH: "amd64"})
+		if !strings.Contains(got, tc.wantLabel) {
+			t.Errorf("%s: missing %q:\n%s", tc.goos, tc.wantLabel, got)
+		}
+		if strings.Contains(got, "cmd.exe /C") != tc.wantHint {
+			t.Errorf("%s: windows shell hint present=%v, want %v", tc.goos, !tc.wantHint, tc.wantHint)
+		}
+	}
+}
+
 func TestBuildSystemPromptDefaultIncludesBuiltInDocs(t *testing.T) {
 	got := BuildSystemPrompt(SystemPromptOpts{
 		CWD:        "/workspace",

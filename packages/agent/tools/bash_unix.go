@@ -8,6 +8,9 @@ import (
 	"time"
 )
 
+// applyRawCmdLine is only needed for cmd.exe quoting on Windows.
+func applyRawCmdLine(*exec.Cmd, shellCommand, string) {}
+
 // setProcessGroup puts the command in its own process group so
 // killProcessGroup can target the entire tree including background
 // children spawned with &.
