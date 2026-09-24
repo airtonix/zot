@@ -154,6 +154,39 @@ func ReadEventLog(path string) ([]Event, error) {
 	return readEvents(f)
 }
 
+// ReadEventLogTail parses only the last maxBytes of the log. Startup
+// replay of detached agents keeps a bounded transcript anyway, so
+// reading multi-gigabyte logs in full only delays the first frame.
+// The first, possibly partial, line of the window is skipped.
+func ReadEventLogTail(path string, maxBytes int64) ([]Event, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if maxBytes <= 0 || fi.Size() <= maxBytes {
+		return readEvents(f)
+	}
+	if _, err := f.Seek(fi.Size()-maxBytes, io.SeekStart); err != nil {
+		return nil, err
+	}
+	br := bufio.NewReader(f)
+	if _, err := br.ReadBytes('\n'); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return readEvents(br)
+}
+
 func readEvents(r io.Reader) ([]Event, error) {
 	br := bufio.NewReader(r)
 	var out []Event

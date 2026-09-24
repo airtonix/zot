@@ -180,6 +180,12 @@ func (f *Swarm) Reload() (loaded int, errs []error) {
 	return loaded, errs
 }
 
+// detachedReplayBytes bounds how much of each event log is replayed for
+// a detached agent. The transcript keeps at most 2000 lines and the
+// terminal lifecycle event sits at the end of the log, so the tail is
+// enough; full logs are still read on demand by the dashboard.
+const detachedReplayBytes = 4 << 20
+
 // buildDetachedAgent constructs an Agent from a meta.json with no
 // running Runner. The agent's transcript is populated from the tail
 // of its event log so the dashboard immediately shows recent output;
@@ -223,7 +229,7 @@ func (f *Swarm) buildDetachedAgent(m agentMeta) *Agent {
 	// effort: a missing or unreadable log just leaves the agent
 	// detached with an empty transcript.
 	if a.EventLogPath != "" {
-		if evs, err := ReadEventLog(a.EventLogPath); err == nil {
+		if evs, err := ReadEventLogTail(a.EventLogPath, detachedReplayBytes); err == nil {
 			replayEventsIntoAgent(a, evs)
 		}
 	}
