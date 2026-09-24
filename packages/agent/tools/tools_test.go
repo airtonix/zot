@@ -325,7 +325,7 @@ func TestShellDescription(t *testing.T) {
 		{
 			name:  "Windows",
 			shell: shellCommand{path: "cmd", flag: "/C"},
-			want:  "Run a Windows Command Prompt command via cmd /C. stdout+stderr merged.",
+			want:  "Run a Windows Command Prompt command via cmd /C (not bash: no grep/ls/cat/sed, no $VAR or single quotes; use findstr/dir/type/where and %VAR%). stdout+stderr merged.",
 		},
 	}
 	for _, tt := range tests {
