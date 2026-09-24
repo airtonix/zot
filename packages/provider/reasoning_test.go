@@ -16,6 +16,8 @@ func TestAvailableReasoningLevels(t *testing.T) {
 		{name: "responses", model: Model{Reasoning: true, API: APIResponses, ID: "gpt-5.5"}, want: []string{"", "low", "medium", "high", "xhigh"}},
 		{name: "responses native max", model: Model{Reasoning: true, API: APIResponses, ID: "gpt-5.6-sol"}, want: []string{"", "low", "medium", "high", "xhigh", "max"}},
 		{name: "astra native max", model: Model{Reasoning: true, API: APIResponses, ID: "gpt-6-astra"}, want: []string{"", "low", "medium", "high", "xhigh", "max"}},
+		{name: "sol native max", model: Model{Reasoning: true, API: APIResponses, ID: "gpt-6-sol"}, want: []string{"", "low", "medium", "high", "xhigh", "max"}},
+		{name: "luna native max", model: Model{Reasoning: true, API: APIResponses, ID: "gpt-6-luna"}, want: []string{"", "low", "medium", "high", "xhigh", "max"}},
 		{name: "adaptive", model: Model{Reasoning: true, AdaptiveThinking: true}, want: []string{"", "low", "medium", "high", "xhigh", "max"}},
 		{name: "adaptive compatible", model: Model{Reasoning: true, AdaptiveThinkingCompat: true}, want: []string{"", "high"}},
 		{name: "gemini pro", model: Model{Provider: "google", ID: "gemini-3-pro-preview", Reasoning: true}, want: []string{"", "low", "high"}},
@@ -136,6 +138,8 @@ func TestReasoningEffortMappings(t *testing.T) {
 		{"max", "gpt-5.5", "high", "max", "xhigh", 32768, "max"},
 		{"max", "gpt-6-astra", "high", "max", "max", 32768, "max"},
 		{"max", "GPT-6-ASTRA", "high", "max", "max", 32768, "max"},
+		{"max", "gpt-6-sol", "high", "max", "max", 32768, "max"},
+		{"max", "gpt-6-luna", "high", "max", "max", 32768, "max"},
 		{"max", "gpt-6-unknown", "high", "max", "xhigh", 32768, "max"},
 	}
 	for _, tc := range cases {
