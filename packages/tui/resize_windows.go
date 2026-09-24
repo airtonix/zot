@@ -4,7 +4,6 @@ package tui
 
 import (
 	"os"
-	"sync"
 	"time"
 	"unsafe"
 
@@ -14,15 +13,13 @@ import (
 // resizePollInterval bounds how long a size change goes unnoticed.
 const resizePollInterval = 100 * time.Millisecond
 
-var resizeWatcher sync.Once
-
 // Windows has no SIGWINCH. Console resize events arrive as input records,
 // but stdin is read as a VT byte stream, so those records never reach us.
 // Poll the console size instead and fire the callbacks on every change.
 // This matters most under ConPTY hosts such as multiplexers, where the
 // pane width changes without any user input.
 func (p *ProcTerm) installResizeHandler() {
-	resizeWatcher.Do(func() {
+	p.resizeOnce.Do(func() {
 		go func() {
 			lastW, lastH := p.Size()
 			ticker := time.NewTicker(resizePollInterval)
@@ -60,16 +57,26 @@ type inputRecord struct {
 
 const keyEvent = 0x0001
 
-// yieldsByte reports whether a console record turns into at least one
-// byte for ReadFile: a key-down with a character. Key-ups, focus,
-// mouse, menu, and buffer-size records produce no bytes.
+// yieldsByte reports whether a key-down can produce input in VT mode.
+// Navigation and function keys emit escape sequences even when their
+// UnicodeChar is zero. Key-ups and non-key records produce no bytes.
 func (r *inputRecord) yieldsByte() bool {
 	if r.eventType != keyEvent {
 		return false
 	}
 	keyDown := *(*int32)(unsafe.Pointer(&r.event[0]))
+	if keyDown == 0 {
+		return false
+	}
 	char := *(*uint16)(unsafe.Pointer(&r.event[10]))
-	return keyDown != 0 && char != 0
+	if char != 0 {
+		return true
+	}
+	key := *(*uint16)(unsafe.Pointer(&r.event[4]))
+	// Win32 virtual-key codes for PageUp/Down, End/Home, arrows,
+	// Insert/Delete and F1-F24. ReadConsole translates these into VT
+	// sequences, despite the input record having no Unicode character.
+	return key >= 0x21 && key <= 0x28 || key == 0x2d || key == 0x2e || key >= 0x70 && key <= 0x87
 }
 
 // consoleHasByte checks pending console input without consuming bytes.
