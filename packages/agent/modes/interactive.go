@@ -253,6 +253,11 @@ type InteractiveConfig struct {
 	// Sandbox is the shared sandbox pointer. Toggled by /jail and /unjail.
 	Sandbox *tools.Sandbox
 
+	// NewSession persists and closes the current session, then creates and
+	// binds an empty session in the same working directory. It is nil when
+	// persistence is disabled, including runs started with --no-session.
+	NewSession func(providerName, model string) error
+
 	// LoadSession swaps the current session for the one at path. The
 	// callback returns the new agent message slice so the TUI can invalidate.
 	LoadSession func(path string) error
@@ -729,6 +734,7 @@ func NewInteractive(cfg InteractiveConfig) *Interactive {
 	i.reloadErrors = append(i.reloadErrors, keymapIssues...)
 	i.fileSuggest.SetRecursive(cfg.RecursiveFileSuggest != nil && *cfg.RecursiveFileSuggest)
 	i.suggest.SetFuzzySkills(cfg.FuzzySkillSuggest != nil && *cfg.FuzzySkillSuggest)
+	i.suggest.SetSessionsEnabled(cfg.NewSession != nil)
 	i.fileSuggest.SetRespectGitignore(cfg.RespectGitignore == nil || *cfg.RespectGitignore)
 	if cfg.LlamaCPPConfig != nil {
 		baseURL, _, err := cfg.LlamaCPPConfig()
@@ -1449,8 +1455,8 @@ func (i *Interactive) redraw() {
 		i.suggest.SetSkills(list)
 	}
 	// Slash popup renders even while the agent is busy so the user
-	// can queue a destructive command (/clear, /compact, /logout,
-	// /model) or a read-only one (/help, /jump, /sessions, etc.)
+	// can queue a destructive command (/new, /clear, /compact,
+	// /logout, /model) or a read-only one (/help, /jump, /sessions, etc.)
 	// without waiting for the current turn to finish. The dispatcher
 	// in runSlash already handles the busy case per-command: safe
 	// ones run immediately, destructive ones cancel the turn first.
@@ -2537,7 +2543,7 @@ func (i *Interactive) handleKey(ctx context.Context, k tui.Key) (done bool) {
 	if !keymapReservedKey(k) {
 		if command := lookupKeymap(i.keymap, k); command != "" {
 			parts := strings.Fields(command)
-			if len(parts) > 0 && slashCancelsTurn(parts[0]) {
+			if len(parts) > 0 && i.slashCancelsActiveTurn(parts[0]) {
 				i.cancelAndWaitForIdle()
 			}
 			i.ed.Clear()
@@ -2916,13 +2922,13 @@ func (i *Interactive) handleKey(ctx context.Context, k tui.Key) (done bool) {
 				return false
 			}
 			// Slash commands run regardless of busy state. Commands that
-			// would mutate the transcript or replace the agent (/clear,
-			// /compact, /logout, /login, /model) cancel the active turn
+			// would mutate the transcript or replace the agent (/new,
+			// /clear, /compact, /logout, /login, /model) cancel the active turn
 			// first and wait for the goroutine to wind down so they don't
 			// race with a streaming response. Safe commands (/help,
 			// /jump, /sessions, /jail, /unjail, /exit) run immediately
 			// without disturbing the active turn.
-			if slashCancelsTurn(head) {
+			if i.slashCancelsActiveTurn(head) {
 				i.cancelAndWaitForIdle()
 			}
 			return i.runSlash(ctx, text)
@@ -3331,7 +3337,7 @@ func (i *Interactive) SubmitSlash(text string) {
 	if idx := strings.IndexAny(text, " \t"); idx >= 0 {
 		head = text[:idx]
 	}
-	if slashCancelsTurn(head) {
+	if i.slashCancelsActiveTurn(head) {
 		i.cancelAndWaitForIdle()
 	}
 	i.runSlash(i.runCtx, text)
@@ -4721,6 +4727,53 @@ func (i *Interactive) runSlash(ctx context.Context, cmd string) (done bool) {
 	switch strings.ToLower(parts[0]) {
 	case "/exit":
 		return true
+	case "/new":
+		if i.cfg.NewSession == nil {
+			i.mu.Lock()
+			i.statusErr = "sessions are disabled by --no-session"
+			i.statusOK = ""
+			i.mu.Unlock()
+			break
+		}
+		if err := i.cfg.NewSession(i.cfg.Provider, i.cfg.Model); err != nil {
+			i.mu.Lock()
+			i.statusErr = "start new session: " + err.Error()
+			i.statusOK = ""
+			i.mu.Unlock()
+			break
+		}
+		i.mu.Lock()
+		i.toolCalls = map[string]*tui.ToolCallView{}
+		i.toolOrder = nil
+		i.toolGate = map[string]int{}
+		i.queued = nil
+		i.clipboardImages = nil
+		i.resetStreamingStateLocked()
+		i.clearPendingCompactTurnLocked()
+		i.pendingRescuePrompt = ""
+		i.pendingRescueImages = nil
+		i.statusErr = ""
+		i.statusOK = "started new session"
+		i.helpBlock = nil
+		i.parkedTurn = 0
+		i.parkedTotal = 0
+		i.scrollOffset = 0
+		i.prevChatLen = 0
+		i.prevChatCols = 0
+		i.extNotes = nil
+		i.reloadErrors = nil
+		i.cumUsage = provider.Usage{}
+		i.lastCtxInput = 0
+		i.inputHistoryIndex = -1
+		i.pendingFork = false
+		i.view.Messages = nil
+		i.view.TailLimit = 0
+		i.view.InvalidateRenderCache()
+		i.mu.Unlock()
+		if i.cfg.ConfirmGate != nil {
+			i.cfg.ConfirmGate.Reset()
+		}
+		i.SetPinnedSkillsPending(true)
 	case "/clear":
 		if i.agent != nil {
 			i.agent.SetMessages(nil)
@@ -4742,7 +4795,7 @@ func (i *Interactive) runSlash(ctx context.Context, cmd string) (done bool) {
 		i.SetPinnedSkillsPending(true)
 	case "/help":
 		i.mu.Lock()
-		i.helpBlock = renderHelpBlock(i.cfg.Theme, i.lastCols(), i.llamaConfigured, i.keymap)
+		i.helpBlock = renderHelpBlock(i.cfg.Theme, i.lastCols(), i.llamaConfigured, i.cfg.NewSession != nil, i.keymap)
 		i.statusErr = ""
 		i.statusOK = ""
 		// Pin the viewport to the newest content so the help block,
@@ -5328,14 +5381,21 @@ func (i *Interactive) submitManualOAuthCode(code string) {
 	}()
 }
 
+// slashCancelsActiveTurn applies command availability to the destructive
+// command classification. In particular, /new must not cancel work when
+// session persistence is disabled and the command cannot run.
+func (i *Interactive) slashCancelsActiveTurn(head string) bool {
+	return slashCancelsTurn(head) && !(strings.EqualFold(head, "/new") && i.cfg.NewSession == nil)
+}
+
 // applyModelSelection switches the active model (and provider, if the
 // new model belongs to a different one). It rebuilds the underlying
 // client when needed so the provider wire-protocol matches.
 // cancelAndWaitForIdle cancels the active turn (if any) and blocks
 // briefly until the turn goroutine has updated i.busy = false. Used
 // before destructive slash commands so transcript-mutating work
-// (/clear, /compact, /logout, /login completion, cross-provider
-// /model swap) doesn't race with the still-running stream.
+// (/new, /clear, /compact, /logout, /login completion,
+// cross-provider /model swap) doesn't race with the still-running stream.
 //
 // The wait is bounded; if the turn doesn't release within the timeout
 // we proceed anyway. Worst case is a brief overlap that the agent's

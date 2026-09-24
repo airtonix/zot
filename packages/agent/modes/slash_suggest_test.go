@@ -37,6 +37,17 @@ func TestSlashSuggesterShowsLlamaOnlyWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestSlashSuggesterShowsNewOnlyWithSessions(t *testing.T) {
+	s := newSlashSuggester()
+	if got := commandNames(s.matches("/new")); contains(got, "/new") {
+		t.Fatalf("/new visible with sessions disabled: %v", got)
+	}
+	s.SetSessionsEnabled(true)
+	if got := commandNames(s.matches("/new")); !contains(got, "/new") {
+		t.Fatalf("/new missing with sessions enabled: %v", got)
+	}
+}
+
 func TestSlashSuggesterHasSwarm(t *testing.T) {
 	s := newSlashSuggester()
 	if got := commandNames(s.matches("/sw")); !contains(got, "/swarm") {
@@ -83,6 +94,9 @@ func TestSlashCommandsAreCaseInsensitive(t *testing.T) {
 	}
 	if !slashCancelsTurn("/CLEAR") {
 		t.Fatal("/CLEAR did not retain /clear cancellation semantics")
+	}
+	if !slashCancelsTurn("/NEW") {
+		t.Fatal("/NEW did not retain /new cancellation semantics")
 	}
 }
 

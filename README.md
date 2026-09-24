@@ -351,6 +351,7 @@ Slash command names are case-insensitive in the TUI and messaging backends; argu
 | `/reasoning` | Set the reasoning level for subsequent model calls. |
 | `/llama` | Connect to the configured llama.cpp router, load, unload, or remove cached models, and search/download GGUF models from Hugging Face with live progress. Shown after llama.cpp login is configured. |
 | `/sessions` | Resume a previous session for this directory. |
+| `/new` | Persist the current conversation and start a fresh session in the same directory. Unavailable with `--no-session`. |
 | `/session` | Five ops on the current session: inspect its `timeline`, `export` to a portable `.zotsession` file, `import` one back in, `fork` from a past user message, or view its branch `tree`. Opens a picker without an argument; direct forms include `/session timeline`, `/session export [path]`, `/session import <path>`, `/session fork`, and `/session tree`. Default export destination is `~/Downloads`. |
 | `/jump` | Scroll the chat to a previous turn (or `/jump <text>` to filter). |
 | `/btw` | Side chat with full context that doesn't add to the main thread. |
@@ -511,7 +512,7 @@ This is a guardrail against accidents, not a hard security boundary. If you need
 
 ## Sessions
 
-Every interactive or print/json run (unless `--no-session`) writes a JSONL transcript under `$ZOT_HOME/sessions/<cwd-hash>/`. Resume any of them with `--continue`, `--resume`, `--session <path>`, or interactively via `/sessions` inside the TUI. Empty sessions (the user exited without prompting) are deleted on close so the list stays tidy.
+Every interactive or print/json run (unless `--no-session`) writes a JSONL transcript under `$ZOT_HOME/sessions/<cwd-hash>/`. Resume any of them with `--continue`, `--resume`, `--session <path>`, or interactively via `/sessions` inside the TUI. In interactive mode, `/new` persists the current conversation and starts an empty session while preserving the working directory, model, tools, extensions, and runtime settings. It does not make a model call, and the previous conversation remains available through `/sessions`. `/new` is hidden from autocomplete and `/help` with `--no-session`, and invoking it directly reports that sessions are disabled. Empty sessions (the user exited without prompting) are deleted on close so the list stays tidy.
 
 Use `zot sessions prune` outside the TUI to find sessions whose recorded working directories no longer exist. The command groups sessions by directory, shows the number and human-readable total size of stored sessions, lets you select groups, and requires confirmation before permanently deleting files. It preserves sessions when a directory check fails with an error other than "not found" and rechecks each selected directory immediately before deletion. A deleted directory and a path hidden by some unmounted filesystems are indistinguishable, so review the selection and ensure remote filesystems are mounted before deleting missing-directory groups.
 
@@ -1118,7 +1119,7 @@ You can keep typing while the agent is working. Pressing `enter` during a turn q
 
 To recover the most recently queued message back into the editor (to tweak it before it runs), press `Option+↑`. In VS Code's integrated terminal that chord doesn't survive xterm.js's macOS key handling — use `Option+Shift+↑` there. zot's hint line under the sliding-in queue adapts automatically based on `$TERM_PROGRAM`.
 
-Slash commands also work while the agent is busy. Non-destructive ones (`/help`, `/jump`, `/btw`, `/sessions`, `/skills`, `/reasoning`, `/settings`, `/jail`, `/unjail`, `/exit`) take effect immediately. Destructive ones (`/clear`, `/compact`, `/login`, `/logout`, `/model`, `/reload-ext`) cancel the active turn first and then run.
+Slash commands also work while the agent is busy. Non-destructive ones (`/help`, `/jump`, `/btw`, `/sessions`, `/skills`, `/reasoning`, `/settings`, `/jail`, `/unjail`, `/exit`) take effect immediately. Destructive ones (`/new`, `/clear`, `/compact`, `/login`, `/logout`, `/model`, `/reload-ext`) cancel the active turn first and then run.
 
 
 ## Keys (interactive mode)

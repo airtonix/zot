@@ -28,7 +28,7 @@ type slashCommand struct {
 // the streaming response without trouble.
 func slashCancelsTurn(head string) bool {
 	switch strings.ToLower(head) {
-	case "/clear", "/compact", "/logout", "/login", "/model", "/llama", "/reload-ext", "/cd":
+	case "/new", "/clear", "/compact", "/logout", "/login", "/model", "/llama", "/reload-ext", "/cd":
 		return true
 	}
 	return false
@@ -44,6 +44,7 @@ var slashCatalog = []slashCommand{
 	{Name: "/reasoning", Desc: "set the reasoning level"},
 	{Name: "/llama", Desc: "manage llama.cpp router models"},
 	{Name: "/sessions", Desc: "resume a previous session for this directory"},
+	{Name: "/new", Desc: "start a fresh session in this directory"},
 	{Name: "/session", Desc: "manage the current session"},
 	{Name: "/jump", Desc: "scroll the chat to a previous turn (or /jump <text>)"},
 	{Name: "/compact", Desc: "summarize and replace the transcript to free up context"},
@@ -78,6 +79,7 @@ type slashSuggester struct {
 	// jailed and llamaConfigured drive state-dependent command visibility.
 	jailed          bool
 	llamaConfigured bool
+	sessionsEnabled bool
 
 	// extra are commands contributed by extensions, refreshed each
 	// frame from the extension manager. Empty when no extensions
@@ -195,6 +197,9 @@ func (s *slashSuggester) SetJailed(jailed bool) { s.jailed = jailed }
 // available.
 func (s *slashSuggester) SetLlamaConfigured(configured bool) { s.llamaConfigured = configured }
 
+// SetSessionsEnabled controls commands that require persisted sessions.
+func (s *slashSuggester) SetSessionsEnabled(enabled bool) { s.sessionsEnabled = enabled }
+
 // allCatalog returns slashCatalog plus the current extra commands
 // (extension-registered) with a header divider between the two
 // groups. Extra entries are only kept if they don't collide with
@@ -235,7 +240,7 @@ func (s *slashSuggester) baseCatalog() []slashCommand {
 	}
 	out := make([]slashCommand, 0, len(slashCatalog)-1)
 	for _, c := range slashCatalog {
-		if c.Name == hide || (c.Name == "/llama" && !s.llamaConfigured) {
+		if c.Name == hide || (c.Name == "/llama" && !s.llamaConfigured) || (c.Name == "/new" && !s.sessionsEnabled) {
 			continue
 		}
 		out = append(out, c)

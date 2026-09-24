@@ -36,7 +36,7 @@ var helpKeyRows = [][2]string{
 // section it lives in. The width is computed from the longest label
 // across BOTH lists, with a minimum of 14 cells so changes to either
 // list don't compress the column visually.
-func renderHelpBlock(th tui.Theme, width int, llamaConfigured bool, keymap []keymapBinding) []string {
+func renderHelpBlock(th tui.Theme, width int, llamaConfigured, sessionsEnabled bool, keymap []keymapBinding) []string {
 	if width < 20 {
 		width = 20
 	}
@@ -50,7 +50,7 @@ func renderHelpBlock(th tui.Theme, width int, llamaConfigured bool, keymap []key
 	// already, leaving its description mis-aligned).
 	labelWidth := 14
 	for _, c := range slashCatalog {
-		if c.Name == "/llama" && !llamaConfigured {
+		if (c.Name == "/llama" && !llamaConfigured) || (c.Name == "/new" && !sessionsEnabled) {
 			continue
 		}
 		if n := runewidth.StringWidth(c.Name); n > labelWidth {
@@ -82,7 +82,7 @@ func renderHelpBlock(th tui.Theme, width int, llamaConfigured bool, keymap []key
 	// commands section
 	out = append(out, tui.Bold("slash commands:"))
 	for _, c := range slashCatalog {
-		if c.Name == "/llama" && !llamaConfigured {
+		if (c.Name == "/llama" && !llamaConfigured) || (c.Name == "/new" && !sessionsEnabled) {
 			continue
 		}
 		out = append(out, fmt.Sprintf("  %s  %s",

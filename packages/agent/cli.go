@@ -1105,6 +1105,40 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		return nil
 	}
 
+	var newSession func(providerName, model string) error
+	if !args.NoSess {
+		newSession = func(providerName, model string) error {
+			currentAg := liveInteractiveAgent(iv, ag)
+			if currentAg == nil {
+				return fmt.Errorf("no agent running; log in first")
+			}
+
+			persistMu.Lock()
+			newSess, err := rotateInteractiveSession(
+				agentSessionsRoot(ZotHome(), args), r.CWD, providerName, model, version,
+				currentAg, sess, sessBaselineMsgs,
+			)
+			if err == nil {
+				sess = newSess
+				sessBaselineMsgs = 0
+			}
+			persistMu.Unlock()
+			if err != nil {
+				return err
+			}
+
+			active := r
+			active.Provider = providerName
+			active.Model = model
+			setZotSessionEnvironment(active, newSess)
+			startExtensionSession(extMgr, currentAg, r.CWD, "session_switch")
+			if swarmMgr != nil {
+				swarmMgr.SetActiveSession(newSess.ID)
+			}
+			return nil
+		}
+	}
+
 	// changeCWD switches the running session to a new working directory.
 	// Wired into InteractiveConfig.ChangeCWD and invoked by the hidden
 	// /cd slash command (which itself is only fired by the workspaces
@@ -1424,6 +1458,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 			}
 			return out
 		},
+		NewSession:  newSession,
 		LoadSession: loadSession,
 		ChangeCWD:   changeCWD,
 		CurrentSessionPath: func() string {
@@ -1686,6 +1721,29 @@ func pickSession(root, cwd string) (string, error) {
 		return "", fmt.Errorf("invalid selection")
 	}
 	return files[n-1], nil
+}
+
+// rotateInteractiveSession creates the replacement before mutating the live
+// agent, so a creation failure leaves the current conversation usable.
+// Callers must hold the interactive persistence mutex.
+func rotateInteractiveSession(root, cwd, providerName, model, version string, ag *core.Agent, old *core.Session, baseline int) (*core.Session, error) {
+	if ag == nil {
+		return nil, fmt.Errorf("no agent running")
+	}
+	fresh, err := core.NewSession(root, cwd, providerName, model, version)
+	if err != nil {
+		return nil, err
+	}
+	if old != nil {
+		writeNewTranscriptLocked(ag, old, baseline)
+		_ = old.Close()
+	}
+	ag.SetMessages(nil)
+	ag.DrainQueuedMessages()
+	ag.SeedCost(provider.Usage{})
+	ag.SeedLastTurnUsage(provider.Usage{})
+	bindAgentSession(ag, fresh)
+	return fresh, nil
 }
 
 // WriteNewTranscript appends only messages after index `from` from the
