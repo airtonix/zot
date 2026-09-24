@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"golang.org/x/term"
@@ -31,9 +32,10 @@ type Terminal interface {
 
 // ProcTerm is a Terminal bound to the current process's tty.
 type ProcTerm struct {
-	out       *os.File
-	in        *os.File
-	resizeCBs []func()
+	out        *os.File
+	in         *os.File
+	resizeCBs  []func()
+	resizeOnce sync.Once // Windows polls each terminal independently.
 }
 
 // NewProcTerm returns a Terminal bound to stdin/stdout.
