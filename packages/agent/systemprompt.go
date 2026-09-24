@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -26,6 +27,8 @@ type SystemPromptOpts struct {
 	Append     []string // extra text appended at the end
 	Now        time.Time
 	ZotDocsDir string
+	GOOS       string // defaults to runtime.GOOS; overridable for tests
+	GOARCH     string // defaults to runtime.GOARCH
 }
 
 // BuildSystemPrompt constructs the system prompt.
@@ -79,8 +82,30 @@ func BuildSystemPrompt(o SystemPromptOpts) string {
 	}
 
 	fmt.Fprintf(&sb, "\n\nCurrent date: %s\nCurrent working directory: %s\n", date, cwd)
+	sb.WriteString(platformLine(o.GOOS, o.GOARCH))
 	return sb.String()
 }
+
+// platformLine tells the model which OS and shell dialect its commands
+// run under. Without it models default to POSIX syntax, and on Windows
+// every failed grep/ls/&&-chain round-trip wastes a tool call and its
+// tokens. Kept to one or two lines because it sits in the cached prefix.
+func platformLine(goos, goarch string) string {
+	if goos == "" {
+		goos = runtime.GOOS
+	}
+	if goarch == "" {
+		goarch = runtime.GOARCH
+	}
+	line := fmt.Sprintf("Platform: %s/%s\n", goos, goarch)
+	if goos == "windows" {
+		line += windowsShellHint
+	}
+	return line
+}
+
+const windowsShellHint = `The bash tool runs cmd.exe /C, not a POSIX shell: use cmd syntax (dir, type, findstr, where, set, %VAR%, backslash paths); grep, ls, cat, sed, head, $VAR, and single quotes do not work. Keep commands simple: cmd's quoting breaks on nested double quotes, so prefer the read and glob tools for searching, git grep for code, and powershell -NoProfile -File <script.ps1> for anything complex.
+`
 
 const defaultIdentity = `You are an expert coding assistant operating inside zot, a coding agent harness. The name "zot" stands for "zero-overhead-tool"; if the user asks what zot means, answer exactly that.
 
