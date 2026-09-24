@@ -415,6 +415,20 @@ var Catalog = []Model{
 		PriceTierInputTokens: 272000,
 		PriceInputAbove:      20, PriceOutputAbove: 75, PriceCacheReadAbove: 2, PriceCacheWriteAbove: 25,
 	},
+	{
+		Provider: "openai", ID: "gpt-6-sol", DisplayName: "GPT-6 Sol", API: APIResponses,
+		ContextWindow: 272000, MaxOutput: 128000, Reasoning: true,
+		PriceInput: 2, PriceOutput: 10, PriceCacheRead: 0.2, PriceCacheWrite: 2.5,
+		PriceTierInputTokens: 272000,
+		PriceInputAbove:      4, PriceOutputAbove: 15, PriceCacheReadAbove: 0.4, PriceCacheWriteAbove: 5,
+	},
+	{
+		Provider: "openai", ID: "gpt-6-luna", DisplayName: "GPT-6 Luna", API: APIResponses,
+		ContextWindow: 272000, MaxOutput: 128000, Reasoning: true,
+		PriceInput: 0.1, PriceOutput: 0.5, PriceCacheRead: 0.01, PriceCacheWrite: 0.125,
+		PriceTierInputTokens: 272000,
+		PriceInputAbove:      0.2, PriceOutputAbove: 0.75, PriceCacheReadAbove: 0.02, PriceCacheWriteAbove: 0.25,
+	},
 
 	// ---- OpenAI Codex / ChatGPT subscription backend ----
 	// Same model ids as the OpenAI family, but routed through the
@@ -467,6 +481,20 @@ var Catalog = []Model{
 		PriceInput: 10, PriceOutput: 50, PriceCacheRead: 1, PriceCacheWrite: 12.5,
 		PriceTierInputTokens: 272000,
 		PriceInputAbove:      20, PriceOutputAbove: 75, PriceCacheReadAbove: 2, PriceCacheWriteAbove: 25,
+	},
+	{
+		Provider: "openai-codex", ID: "gpt-6-sol", DisplayName: "GPT-6 Sol", API: APIResponses,
+		ContextWindow: 272000, MaxOutput: 128000, Reasoning: true,
+		PriceInput: 2, PriceOutput: 10, PriceCacheRead: 0.2, PriceCacheWrite: 2.5,
+		PriceTierInputTokens: 272000,
+		PriceInputAbove:      4, PriceOutputAbove: 15, PriceCacheReadAbove: 0.4, PriceCacheWriteAbove: 5,
+	},
+	{
+		Provider: "openai-codex", ID: "gpt-6-luna", DisplayName: "GPT-6 Luna", API: APIResponses,
+		ContextWindow: 272000, MaxOutput: 128000, Reasoning: true,
+		PriceInput: 0.1, PriceOutput: 0.5, PriceCacheRead: 0.01, PriceCacheWrite: 0.125,
+		PriceTierInputTokens: 272000,
+		PriceInputAbove:      0.2, PriceOutputAbove: 0.75, PriceCacheReadAbove: 0.02, PriceCacheWriteAbove: 0.25,
 	},
 }
 
