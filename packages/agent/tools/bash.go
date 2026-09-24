@@ -286,7 +286,7 @@ func isExecutableFile(path string) bool {
 
 func shellDescription(shell shellCommand) string {
 	if shell.flag == "/C" {
-		return "Run a Windows Command Prompt command via cmd /C. stdout+stderr merged."
+		return "Run a Windows Command Prompt command via cmd /C (not bash: no grep/ls/cat/sed, no $VAR or single quotes; use findstr/dir/type/where and %VAR%). stdout+stderr merged."
 	}
 	if shell.isBash {
 		return fmt.Sprintf("Run a Bash command via %s -c. stdout+stderr merged.", shell.path)
@@ -296,5 +296,7 @@ func shellDescription(shell shellCommand) string {
 
 func newShellCmd(ctx context.Context, command string) *exec.Cmd {
 	shell := currentShell()
-	return exec.CommandContext(ctx, shell.path, shell.flag, command)
+	cmd := exec.CommandContext(ctx, shell.path, shell.flag, command)
+	applyRawCmdLine(cmd, shell, command)
+	return cmd
 }
