@@ -89,9 +89,8 @@ func TestReadEventLogTailSkipsPartialFirstLine(t *testing.T) {
 	}
 }
 
-// A window that falls exactly on a line boundary still drops its first
-// line: it cannot tell a boundary from a partial line, and losing one
-// event of a bounded transcript is harmless.
+// A window starting on a line boundary must keep its first event.
+// In particular, that event might be the only lifecycle marker in the tail.
 func TestReadEventLogTailBoundaryWindow(t *testing.T) {
 	path, size := writeTailLog(t, 10)
 	starts := lineStarts(t, path)
@@ -100,7 +99,7 @@ func TestReadEventLogTailBoundaryWindow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	want := []string{"e7", "e8", "e9"}
+	want := []string{"e6", "e7", "e8", "e9"}
 	if fmt.Sprint(eventTypes(got)) != fmt.Sprint(want) {
 		t.Fatalf("got %v, want %v", eventTypes(got), want)
 	}

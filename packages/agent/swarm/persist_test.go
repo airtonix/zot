@@ -221,6 +221,37 @@ func TestReloadReplaysTranscriptFromEventLog(t *testing.T) {
 	}
 }
 
+func TestDetachedReplayKeepsLastAnswerAcrossLargeEvents(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "events.jsonl")
+	log, err := OpenEventLog(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ev := range []Event{
+		NewEvent("assistant_message", map[string]any{
+			"content": []any{map[string]any{"type": "text", "text": "final answer"}},
+		}),
+		NewEvent("tool_result", map[string]any{"data": strings.Repeat("x", detachedReplayBytes)}),
+		NewEvent("agent_stopped", map[string]any{"reason": "exit", "code": 0}),
+	} {
+		if err := log.Append(ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := log.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	a := New(Config{Root: root, RepoRoot: root}).buildDetachedAgent(agentMeta{
+		ID: "large", EventLogPath: path,
+	})
+	if got := a.Snapshot(); got.LastAssistant != "final answer" ||
+		len(got.Lines) != 1 || got.Lines[0] != "final answer" || got.Status != StatusDone {
+		t.Fatalf("replayed snapshot: assistant=%q, lines=%v, status=%s", got.LastAssistant, got.Lines, got.Status)
+	}
+}
+
 // TestReloadSkipsBareDirsAndCorruptMeta ensures one bad meta.json
 // doesn't blow up the whole reload. Directories with no meta.json
 // at all are silently ignored (Spawn that failed mid-way leaves

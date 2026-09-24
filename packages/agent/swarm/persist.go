@@ -180,10 +180,8 @@ func (f *Swarm) Reload() (loaded int, errs []error) {
 	return loaded, errs
 }
 
-// detachedReplayBytes bounds how much of each event log is replayed for
-// a detached agent. The transcript keeps at most 2000 lines and the
-// terminal lifecycle event sits at the end of the log, so the tail is
-// enough; full logs are still read on demand by the dashboard.
+// detachedReplayBytes is the initial replay window. Expand it when a
+// sparse transcript or a large event leaves relevant history outside it.
 const detachedReplayBytes = 4 << 20
 
 // buildDetachedAgent constructs an Agent from a meta.json with no
@@ -229,11 +227,43 @@ func (f *Swarm) buildDetachedAgent(m agentMeta) *Agent {
 	// effort: a missing or unreadable log just leaves the agent
 	// detached with an empty transcript.
 	if a.EventLogPath != "" {
-		if evs, err := ReadEventLogTail(a.EventLogPath, detachedReplayBytes); err == nil {
-			replayEventsIntoAgent(a, evs)
-		}
+		replayDetachedEventLog(a)
 	}
 	return a
+}
+
+// replayDetachedEventLog starts at the end of the file, expanding the
+// window only when the bounded transcript or latest assistant reply may
+// still depend on earlier events. In sparse logs, preserving those fields
+// can require reading the entire file.
+func replayDetachedEventLog(a *Agent) {
+	fi, err := os.Stat(a.EventLogPath)
+	if err != nil {
+		return
+	}
+	size := fi.Size()
+	limit := int64(detachedReplayBytes)
+	for {
+		evs, err := ReadEventLogTail(a.EventLogPath, limit)
+		if err != nil {
+			return
+		}
+		if limit >= size {
+			replayEventsIntoAgent(a, evs)
+			return
+		}
+		trial := &Agent{status: StatusDetached, activity: "detached"}
+		replayEventsIntoAgent(trial, evs)
+		if len(trial.transcript) == 2000 && trial.lastAssistant != "" {
+			replayEventsIntoAgent(a, evs)
+			return
+		}
+		if limit >= size/2 {
+			limit = size
+		} else {
+			limit *= 2
+		}
+	}
 }
 
 // replayEventsIntoAgent re-derives an agent's transcript and last
