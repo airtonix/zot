@@ -180,6 +180,10 @@ func (f *Swarm) Reload() (loaded int, errs []error) {
 	return loaded, errs
 }
 
+// detachedReplayBytes bounds startup replay; full history is loaded
+// when the dashboard is opened or the agent is resumed.
+const detachedReplayBytes = 4 << 20
+
 // buildDetachedAgent constructs an Agent from a meta.json with no
 // running Runner. The agent's transcript is populated from the tail
 // of its event log so the dashboard immediately shows recent output;
@@ -223,11 +227,34 @@ func (f *Swarm) buildDetachedAgent(m agentMeta) *Agent {
 	// effort: a missing or unreadable log just leaves the agent
 	// detached with an empty transcript.
 	if a.EventLogPath != "" {
-		if evs, err := ReadEventLog(a.EventLogPath); err == nil {
+		if evs, err := ReadEventLogTail(a.EventLogPath, detachedReplayBytes); err == nil {
 			replayEventsIntoAgent(a, evs)
+		}
+		if fi, err := os.Stat(a.EventLogPath); err == nil && fi.Size() > detachedReplayBytes {
+			a.needsFullReplay = true
 		}
 	}
 	return a
+}
+
+// loadFullTranscript backfills a detached agent on demand. Keep the
+// status inferred from the newest lifecycle event in the startup tail.
+// The agent's mutex serializes concurrent dashboard refreshes and resume.
+func (a *Agent) loadFullTranscript() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if !a.needsFullReplay {
+		return
+	}
+	evs, err := ReadEventLog(a.EventLogPath)
+	if err != nil {
+		return
+	}
+	full := &Agent{status: StatusDetached, activity: "detached"}
+	replayEventsIntoAgent(full, evs)
+	a.transcript = full.transcript
+	a.lastAssistant = full.lastAssistant
+	a.needsFullReplay = false
 }
 
 // replayEventsIntoAgent re-derives an agent's transcript and last
@@ -333,6 +360,7 @@ func (f *Swarm) Resume(ctx context.Context, id string) (*Agent, error) {
 	if st == StatusRunning || st == StatusPending {
 		return nil, fmt.Errorf("swarm: agent %s is still %s; stop it first", existing.ID, st)
 	}
+	existing.loadFullTranscript()
 
 	// Rebuild from the meta record so we don't carry stale runner
 	// state from a previous incarnation. The inbox is transient and

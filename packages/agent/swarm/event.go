@@ -154,6 +154,44 @@ func ReadEventLog(path string) ([]Event, error) {
 	return readEvents(f)
 }
 
+// ReadEventLogTail parses only the last maxBytes of the log.
+// A partial first line is skipped; a complete line on the boundary is kept.
+func ReadEventLogTail(path string, maxBytes int64) ([]Event, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if maxBytes <= 0 || fi.Size() <= maxBytes {
+		return readEvents(f)
+	}
+	start := fi.Size() - maxBytes
+	var prev [1]byte
+	if _, err := f.ReadAt(prev[:], start-1); err != nil {
+		return nil, err
+	}
+	if _, err := f.Seek(start, io.SeekStart); err != nil {
+		return nil, err
+	}
+	br := bufio.NewReader(f)
+	if prev[0] != '\n' {
+		if _, err := br.ReadBytes('\n'); err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil, nil
+			}
+			return nil, err
+		}
+	}
+	return readEvents(br)
+}
+
 func readEvents(r io.Reader) ([]Event, error) {
 	br := bufio.NewReader(r)
 	var out []Event

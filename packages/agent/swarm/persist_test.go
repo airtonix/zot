@@ -221,6 +221,61 @@ func TestReloadReplaysTranscriptFromEventLog(t *testing.T) {
 	}
 }
 
+func TestDetachedReplayKeepsLastAnswerAcrossLargeEvents(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "events.jsonl")
+	log, err := OpenEventLog(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ev := range []Event{
+		NewEvent("assistant_message", map[string]any{
+			"content": []any{map[string]any{"type": "text", "text": "final answer"}},
+		}),
+		NewEvent("tool_result", map[string]any{"data": strings.Repeat("x", detachedReplayBytes)}),
+		NewEvent("agent_stopped", map[string]any{"reason": "exit", "code": 0}),
+	} {
+		if err := log.Append(ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := log.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	f := New(Config{Root: root, RepoRoot: root})
+	a := f.buildDetachedAgent(agentMeta{ID: "large", EventLogPath: path})
+	if got := a.Snapshot(); got.LastAssistant != "" || len(got.Lines) != 0 || got.Status != StatusDone {
+		t.Fatalf("startup should use a bounded tail: assistant=%q, lines=%v, status=%s", got.LastAssistant, got.Lines, got.Status)
+	}
+	f.agents[a.ID] = a
+	f.order = append(f.order, a.ID)
+	got := f.SnapshotAll()
+	if len(got) != 1 || got[0].LastAssistant != "final answer" ||
+		len(got[0].Lines) != 1 || got[0].Lines[0] != "final answer" || got[0].Status != StatusDone {
+		t.Fatalf("dashboard snapshot: %v", got)
+	}
+
+	// Resume must backfill even when the dashboard was never opened.
+	f2 := New(Config{Root: root, RepoRoot: root, NewRunner: func(*Agent) Runner {
+		return RunnerFunc(func(ctx context.Context, _ Sink) error {
+			<-ctx.Done()
+			return ctx.Err()
+		})
+	}})
+	defer f2.StopAll()
+	b := f2.buildDetachedAgent(agentMeta{ID: "large", EventLogPath: path})
+	f2.agents[b.ID] = b
+	f2.order = append(f2.order, b.ID)
+	resumed, err := f2.Resume(context.Background(), b.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lines := resumed.Transcript(); len(lines) != 1 || lines[0] != "final answer" {
+		t.Fatalf("resumed transcript: %v", lines)
+	}
+}
+
 // TestReloadSkipsBareDirsAndCorruptMeta ensures one bad meta.json
 // doesn't blow up the whole reload. Directories with no meta.json
 // at all are silently ignored (Spawn that failed mid-way leaves
