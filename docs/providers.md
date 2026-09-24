@@ -114,10 +114,10 @@ use Chat Completions without `reasoning_effort`; their reasoning is managed by t
 endpoint. All three routes send user/agent initiator metadata and image-request
 headers where appropriate.
 
-As of September 8, 2026, the catalog includes 27 public chat models: Claude
-Fable 5/5.1, Haiku 4.5, Opus 4.7/4.8/4.8 Fast/5, Sonnet 5, Gemini
+As of September 22, 2026, the catalog includes 30 public chat models: Claude
+Fable 5/5.1, Haiku 4.5, Opus 4.7/4.8/4.8 Fast/5/5.5, Sonnet 5, Gemini
 3.5/3.6/3.7/3.8 Flash, GPT-5 mini, GPT-5.3-Codex, GPT-5.4/5.4 mini/5.5,
-GPT-5.6 Luna/Sol/Terra, GPT-6 Astra, Grok 4.5/4.6, Kimi K2.7 Code/K3,
+GPT-5.6 Luna/Sol/Terra, GPT-6 Astra/Luna/Sol, Grok 4.5/4.6, Kimi K2.7 Code/K3,
 and MAI-Code-1-Flash/1.1-Flash. MAI-Code-1-Flash uses the public picker ID
 `mai-code-1-flash-picker` and is scheduled to retire on September 10, 2026.
 
@@ -139,24 +139,24 @@ September 1, 2026, except for individual annual Copilot Pro and Pro+ subscribers
 Eligible subscribers can add it through `$ZOT_HOME/models.json`.
 See [GitHub's model retirement history and plan exceptions](https://docs.github.com/en/copilot/reference/ai-models/supported-models#model-retirement-history).
 
-## GPT-6 Astra
+## GPT-6 models
 
-Select `gpt-6-astra` with provider `openai`, `openai-responses`,
-`openai-codex`, or `github-copilot`, for example:
+Select `gpt-6-astra`, `gpt-6-sol`, or `gpt-6-luna` with provider `openai`,
+`openai-responses`, `openai-codex`, or `github-copilot`, for example:
 
 ```bash
-zot --provider github-copilot --model gpt-6-astra
+zot --provider github-copilot --model gpt-6-sol
 ```
 
-Astra uses the Responses API and supports `low`, `medium`, `high`, `xhigh`,
-and `max` reasoning. OpenAI API-key and Codex subscription entries use the
-272,000-token short-context tier by default; the Copilot entry uses a
-1,050,000-token context window. All entries include the 128,000-token output
-limit and standard token prices, including the higher rates for prompts above
-272,000 tokens. Subscription access depends on your
-plan, rollout, and organization policy; catalog availability does not grant access.
-See the [OpenAI model specifications](https://developers.openai.com/api/docs/models/gpt-6-astra)
-and [GitHub Copilot availability](https://github.blog/changelog/2026-09-04-gpt-6-astra-is-generally-available-in-github-copilot/).
+All three use the Responses API, accept image input, support `low`, `medium`,
+`high`, `xhigh`, and `max` reasoning, and allow up to 128,000 output tokens.
+OpenAI API-key and Codex subscription entries use a 272,000-token context
+window. Copilot uses 1,050,000 tokens for Astra and 1,000,000 tokens for Sol
+and Luna. Standard per-million-token prices are $10 input and $50 output for
+Astra, $2 input and $10 output for Sol, and $0.10 input and $0.50 output for
+Luna. Prompts above 272,000 tokens use each model's long-context price tier.
+Subscription access depends on your plan, rollout, and organization policy.
+Catalog availability does not grant access.
 
 ## API-key providers
 
