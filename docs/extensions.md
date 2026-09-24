@@ -180,10 +180,61 @@ other stdout frame before `hello`.
  "capabilities":["commands","tools","panels"]}
 ```
 
+Include `"call_tool"` to opt in to host-mediated calls to built-in and
+extension tools. The host advertises support in `hello_ack.capabilities`.
+Older hosts omit it, and callers must not send `call_tool` to those hosts.
+
 Include `"tool_cancel"` in `capabilities` to opt in to host cancellation
 notifications. The Go SDK advertises this automatically. The host only sends
 `tool_cancel` to extensions advertising that exact capability. Missing or
 unknown capabilities do not enable cancellation notifications.
+
+#### `call_tool`
+
+An opt-in extension may request an active tool by name with JSON object args:
+
+```json
+{"type":"call_tool","id":"request-1","name":"skill","args":{"name":"example"}}
+```
+
+The host replies with a correlated result:
+
+```json
+{"type":"tool_result","id":"request-1","name":"skill",
+ "content":[{"type":"text","text":"..."}],"is_error":false}
+```
+
+`is_error` reports tool or policy failure. Content contains text or base64
+image blocks. Results are bounded to 256 KiB and mark `truncated: true` when
+shortened. Each request is synchronous for its caller, but multiple requests
+can be outstanding concurrently if they use distinct IDs. A
+`call_tool_cancel` frame with the same ID cancels the request. Calls time out
+after 60 seconds or when the extension disconnects. Cancellation cannot undo
+side effects that have already completed.
+
+Calls use the active agent's tool registry, guard interception, and normal
+confirmation policy. Headless modes retain their normal no-confirmation
+behavior. A call does not create a model tool-use message in the session
+transcript. Tool-call, tool-result, confirmation, permission-decision, and
+tool-interception frames identify these calls through `origin_extension`.
+As with model-initiated calls, event subscribers may receive sensitive tool
+output.
+
+Tool handlers can invoke other tools by setting `parent_id` to the ID of the
+host's `tool_call` frame. The host carries the parent's cancellation context
+through the nested call, refuses repeated tool names in a chain, and allows at
+most four tool calls in one chain, including the original tool. Unknown or
+expired parent IDs fail. To avoid untraceable recursion, requests without
+`parent_id` are refused while that extension has a host-invoked tool active.
+A concurrent command-initiated request from that extension is therefore also
+refused until its host-invoked tool finishes. Interactive tools can outlive the
+60-second request deadline only when invoked by the model, not via `call_tool`.
+
+The Go SDK exposes `e.CallTool(ctx, name, args)` and rejects older hosts
+immediately. A tool handler's context supplies `parent_id` automatically.
+Tool failures return `ToolResult.IsError`, while context and transport failures
+return a Go error. Extensions have no direct access to another extension's
+process or built-in implementation.
 
 #### `register_command`
 

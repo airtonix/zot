@@ -9,8 +9,9 @@ import (
 // extension lifecycle event. ConfirmGate only invokes this decorator when a
 // call actually needs user input, after remembered approvals have been checked.
 type confirmationEventConfirmer struct {
-	inner core.Confirmer
-	emit  func(extproto.EventFromHost)
+	inner  core.Confirmer
+	emit   func(extproto.EventFromHost)
+	origin func(string) string
 }
 
 func (c *confirmationEventConfirmer) Confirm(toolName, preview string) core.ConfirmDecision {
@@ -31,10 +32,15 @@ func (c *confirmationEventConfirmer) emitRequest(call core.ToolCallConfirmation)
 	if c.emit == nil {
 		return
 	}
+	origin := ""
+	if c.origin != nil {
+		origin = c.origin(call.ID)
+	}
 	c.emit(extproto.EventFromHost{
-		Event:       "tool_confirmation_requested",
-		ToolID:      call.ID,
-		ToolName:    call.Name,
-		ToolPreview: call.Summary,
+		OriginExtension: origin,
+		Event:           "tool_confirmation_requested",
+		ToolID:          call.ID,
+		ToolName:        call.Name,
+		ToolPreview:     call.Summary,
 	})
 }

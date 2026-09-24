@@ -160,14 +160,15 @@ type ShutdownAckFromExt struct {
 }
 
 type HelloAckFromHost struct {
-	Type            string `json:"type"`
-	ProtocolVersion int    `json:"protocol_version"`
-	ZotVersion      string `json:"zot_version"`
-	Provider        string `json:"provider"`
-	Model           string `json:"model"`
-	CWD             string `json:"cwd"`
-	ExtensionDir    string `json:"extension_dir,omitempty"`
-	DataDir         string `json:"data_dir,omitempty"`
+	Type            string   `json:"type"`
+	ProtocolVersion int      `json:"protocol_version"`
+	Capabilities    []string `json:"capabilities,omitempty"`
+	ZotVersion      string   `json:"zot_version"`
+	Provider        string   `json:"provider"`
+	Model           string   `json:"model"`
+	CWD             string   `json:"cwd"`
+	ExtensionDir    string   `json:"extension_dir,omitempty"`
+	DataDir         string   `json:"data_dir,omitempty"`
 }
 
 type CommandInvokedFromHost struct {
@@ -190,6 +191,26 @@ type ToolCallFromHost struct {
 	Args json.RawMessage `json:"args"`
 }
 
+// CallToolFromExt asks the host to execute an active tool. ParentID is set
+// by the SDK when the request originates inside a host-initiated tool call.
+type CallToolFromExt struct {
+	Type     string          `json:"type"`
+	ID       string          `json:"id"`
+	Name     string          `json:"name"`
+	Args     json.RawMessage `json:"args"`
+	ParentID string          `json:"parent_id,omitempty"`
+}
+
+// ToolResultFromHost is correlated to CallToolFromExt, not to a model call.
+type ToolResultFromHost struct {
+	Type      string         `json:"type"`
+	ID        string         `json:"id"`
+	Name      string         `json:"name"`
+	Content   []ContentBlock `json:"content"`
+	IsError   bool           `json:"is_error,omitempty"`
+	Truncated bool           `json:"truncated,omitempty"`
+}
+
 // EventResult is a tool outcome without extension-private Details or activation data.
 type EventResult struct {
 	Content   []ContentBlock `json:"content"`
@@ -198,52 +219,54 @@ type EventResult struct {
 }
 
 type EventFromHost struct {
-	SessionID     string          `json:"session_id,omitempty"`
-	AgentRunID    string          `json:"agent_run_id,omitempty"`
-	Queued        bool            `json:"queued,omitempty"`
-	ImageCount    int             `json:"image_count,omitempty"`
-	CWD           string          `json:"cwd,omitempty"`
-	Sequence      uint64          `json:"sequence,omitempty"`
-	Status        string          `json:"status,omitempty"`
-	Reason        string          `json:"reason,omitempty"`
-	Source        string          `json:"source,omitempty"`
-	Decision      string          `json:"decision,omitempty"`
-	Stage         string          `json:"stage,omitempty"`
-	Result        *EventResult    `json:"result,omitempty"`
-	Executed      *bool           `json:"executed,omitempty"`
-	CompactionID  string          `json:"compaction_id,omitempty"`
-	MessageCount  *int            `json:"message_count,omitempty"`
-	TokenEstimate *int            `json:"token_estimate,omitempty"`
-	AgentID       string          `json:"agent_id,omitempty"`
-	Name          string          `json:"name,omitempty"`
-	Type          string          `json:"type"`
-	Event         string          `json:"event"`
-	Step          int             `json:"step,omitempty"`
-	Stop          string          `json:"stop,omitempty"`
-	Error         string          `json:"error,omitempty"`
-	ToolID        string          `json:"tool_id,omitempty"`
-	ToolName      string          `json:"tool_name,omitempty"`
-	ToolArgs      json.RawMessage `json:"tool_args,omitempty"`
-	ToolPreview   string          `json:"tool_preview,omitempty"`
-	ToolArgsRaw   string          `json:"tool_args_raw,omitempty"`
-	Text          string          `json:"text,omitempty"`
+	SessionID       string          `json:"session_id,omitempty"`
+	AgentRunID      string          `json:"agent_run_id,omitempty"`
+	Queued          bool            `json:"queued,omitempty"`
+	ImageCount      int             `json:"image_count,omitempty"`
+	CWD             string          `json:"cwd,omitempty"`
+	Sequence        uint64          `json:"sequence,omitempty"`
+	Status          string          `json:"status,omitempty"`
+	Reason          string          `json:"reason,omitempty"`
+	Source          string          `json:"source,omitempty"`
+	Decision        string          `json:"decision,omitempty"`
+	Stage           string          `json:"stage,omitempty"`
+	Result          *EventResult    `json:"result,omitempty"`
+	Executed        *bool           `json:"executed,omitempty"`
+	CompactionID    string          `json:"compaction_id,omitempty"`
+	MessageCount    *int            `json:"message_count,omitempty"`
+	TokenEstimate   *int            `json:"token_estimate,omitempty"`
+	AgentID         string          `json:"agent_id,omitempty"`
+	OriginExtension string          `json:"origin_extension,omitempty"`
+	Name            string          `json:"name,omitempty"`
+	Type            string          `json:"type"`
+	Event           string          `json:"event"`
+	Step            int             `json:"step,omitempty"`
+	Stop            string          `json:"stop,omitempty"`
+	Error           string          `json:"error,omitempty"`
+	ToolID          string          `json:"tool_id,omitempty"`
+	ToolName        string          `json:"tool_name,omitempty"`
+	ToolArgs        json.RawMessage `json:"tool_args,omitempty"`
+	ToolPreview     string          `json:"tool_preview,omitempty"`
+	ToolArgsRaw     string          `json:"tool_args_raw,omitempty"`
+	Text            string          `json:"text,omitempty"`
 }
 
 type EventInterceptFromHost struct {
-	SystemPrompt *string         `json:"system_prompt,omitempty"`
-	SessionID    string          `json:"session_id,omitempty"`
-	AgentRunID   string          `json:"agent_run_id,omitempty"`
-	CWD          string          `json:"cwd,omitempty"`
-	Provider     string          `json:"provider,omitempty"`
-	Model        string          `json:"model,omitempty"`
-	Type         string          `json:"type"`
-	ID           string          `json:"id"`
-	Event        string          `json:"event"`
-	ToolID       string          `json:"tool_id,omitempty"`
-	ToolName     string          `json:"tool_name,omitempty"`
-	ToolArgs     json.RawMessage `json:"tool_args,omitempty"`
-	Step         int             `json:"step,omitempty"`
-	Text         string          `json:"text,omitempty"`
+	SystemPrompt    *string         `json:"system_prompt,omitempty"`
+	OriginExtension string          `json:"origin_extension,omitempty"`
+	SessionID       string          `json:"session_id,omitempty"`
+	AgentRunID      string          `json:"agent_run_id,omitempty"`
+	CWD             string          `json:"cwd,omitempty"`
+	Provider        string          `json:"provider,omitempty"`
+	Model           string          `json:"model,omitempty"`
+	Type            string          `json:"type"`
+	ID              string          `json:"id"`
+	Event           string          `json:"event"`
+	ToolID          string          `json:"tool_id,omitempty"`
+	ToolName        string          `json:"tool_name,omitempty"`
+	ToolArgs        json.RawMessage `json:"tool_args,omitempty"`
+	Step            int             `json:"step,omitempty"`
+	Text            string          `json:"text,omitempty"`
 }
 
 type PanelKeyFromHost struct {

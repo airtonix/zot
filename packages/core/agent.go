@@ -728,6 +728,17 @@ func (a *Agent) oneTurn(ctx context.Context, sink func(AgentEvent)) (provider.St
 	return stop, finalMsg, finalErr
 }
 
+// CallTool executes a host-initiated tool without adding a model tool-use
+// message to the transcript. The caller supplies a unique ID and event sink.
+// It shares the model tool path's guards, confirmation hook and error handling.
+func (a *Agent) CallTool(ctx context.Context, id, name string, args json.RawMessage, sink func(AgentEvent)) ToolResult {
+	if sink == nil {
+		sink = func(AgentEvent) {}
+	}
+	sink(EvToolCall{ID: id, Name: name, Args: args})
+	return a.runOneTool(ctx, provider.ToolCallBlock{ID: id, Name: name, Arguments: args}, sink)
+}
+
 // executeTools runs every tool call in the assistant message and returns
 // a single tool-role message carrying all results.
 func (a *Agent) executeTools(ctx context.Context, msg provider.Message, sink func(AgentEvent)) (provider.Message, bool) {

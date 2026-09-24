@@ -104,10 +104,11 @@ func (m *Manager) InterceptToolCall(ctx context.Context, toolID, toolName string
 	current := args
 	for _, ext := range subs {
 		r := m.askIntercept(ctx, ext, extproto.EventInterceptFromHost{
-			Event:    "tool_call",
-			ToolID:   toolID,
-			ToolName: toolName,
-			ToolArgs: current,
+			OriginExtension: m.ToolCallOrigin(toolID),
+			Event:           "tool_call",
+			ToolID:          toolID,
+			ToolName:        toolName,
+			ToolArgs:        current,
 		})
 		if r.Block {
 			r.ModifiedArgs = current

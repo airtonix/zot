@@ -25,6 +25,30 @@ func (r *recordingTool) Execute(_ context.Context, args json.RawMessage, _ func(
 	}, nil
 }
 
+func TestCallToolUsesPolicyWithoutChangingTranscript(t *testing.T) {
+	rec := &recordingTool{}
+	a := NewAgent(nil, "test", "", Registry{"echo": rec})
+	var events []AgentEvent
+	a.BeforeToolExecute = func(provider.ToolCallBlock) (bool, string, json.RawMessage) {
+		return false, "denied", nil
+	}
+	result := a.CallTool(context.Background(), "extension-call", "echo", json.RawMessage(`{}`), func(ev AgentEvent) {
+		events = append(events, ev)
+	})
+	if !result.IsError || rec.lastArgs != nil || len(a.Messages()) != 0 {
+		t.Fatalf("policy or transcript bypassed: result=%+v, args=%s, messages=%v", result, rec.lastArgs, a.Messages())
+	}
+	if len(events) != 2 {
+		t.Fatalf("expected call/result events, got %v", events)
+	}
+	if _, ok := events[0].(EvToolCall); !ok {
+		t.Fatalf("first event = %T", events[0])
+	}
+	if _, ok := events[1].(EvToolResult); !ok {
+		t.Fatalf("second event = %T", events[1])
+	}
+}
+
 // TestBeforeToolExecuteModifiesArgs verifies that a non-nil
 // modifiedArgs returned from BeforeToolExecute is what the tool
 // actually sees.

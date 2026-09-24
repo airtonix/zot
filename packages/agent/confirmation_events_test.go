@@ -21,6 +21,24 @@ func (c *rememberingDetailedConfirmer) ConfirmToolCall(call core.ToolCallConfirm
 	return core.ConfirmDecision{Allow: true, RememberTool: true}
 }
 
+func TestConfirmationEventIncludesExtensionOrigin(t *testing.T) {
+	var event extproto.EventFromHost
+	confirmer := &confirmationEventConfirmer{
+		inner: &rememberingDetailedConfirmer{},
+		emit:  func(ev extproto.EventFromHost) { event = ev },
+		origin: func(id string) string {
+			if id != "host-call" {
+				t.Fatalf("tool ID: %q", id)
+			}
+			return "caller"
+		},
+	}
+	confirmer.ConfirmToolCall(core.ToolCallConfirmation{ID: "host-call", Name: "read"})
+	if event.OriginExtension != "caller" || event.Event != "tool_confirmation_requested" {
+		t.Fatalf("confirmation event: %+v", event)
+	}
+}
+
 func TestConfirmationEventConfirmerEmitsOnlyWhenPrompting(t *testing.T) {
 	inner := &rememberingDetailedConfirmer{}
 	var events []extproto.EventFromHost

@@ -76,7 +76,8 @@ func emitPermissionDecision(ctx context.Context, mgr *extensions.Manager, call p
 	if ctx.Err() != nil {
 		decision = "cancelled"
 	}
-	mgr.EmitEvent(extproto.EventFromHost{Event: "permission_decision", ToolID: call.ID, ToolName: call.Name, Decision: decision, Source: d.Source, Reason: d.Reason, Stage: "pre_execution"})
+	origin, _ := ctx.Value(extensionOriginKey{}).(string)
+	mgr.EmitEvent(extproto.EventFromHost{Event: "permission_decision", OriginExtension: origin, ToolID: call.ID, ToolName: call.Name, Decision: decision, Source: d.Source, Reason: d.Reason, Stage: "pre_execution"})
 }
 
 func emitSwarmLifecycle(mgr *extensions.Manager, e swarm.LifecycleEvent) {

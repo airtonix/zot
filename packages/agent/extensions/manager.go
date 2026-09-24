@@ -70,6 +70,7 @@ type Extension struct {
 	helloAck bool
 	// Set during the handshake, before the extension is published.
 	toolCancel bool
+	callTool   bool
 	commands   []extproto.RegisterCommandFromExt
 	tools      []extproto.RegisterToolFromExt
 
@@ -86,6 +87,8 @@ type Extension struct {
 	pending          map[string]chan extproto.CommandResponseFromExt
 	pendingTool      map[string]chan extproto.ToolResultFromExt
 	pendingIntercept map[string]chan extproto.EventInterceptResponseFromExt
+	outboundCalls    map[string]outboundCall
+	inboundCalls     map[string]context.CancelFunc
 
 	// lastFrameTime is updated by the read loop on every frame it
 	// processes. Used by the auto-ready idle watchdog so legacy
@@ -179,6 +182,9 @@ type Manager struct {
 	// by the host so it can rebuild the agent's tool registry with
 	// the freshly-registered extension tools.
 	onReload func()
+	// callTool is wired by the active host mode, not by the extension registry.
+	callTool    func(context.Context, string, string, json.RawMessage) extproto.ToolResultFromHost
+	callOrigins map[string]string
 
 	// lifecycleMu serializes session boundaries and notification enqueue order.
 	lifecycleMu   sync.Mutex
@@ -441,6 +447,8 @@ func (m *Manager) loadOne(ctx context.Context, dir string) error {
 		readyCh:          make(chan struct{}),
 		pending:          map[string]chan extproto.CommandResponseFromExt{},
 		pendingTool:      map[string]chan extproto.ToolResultFromExt{},
+		outboundCalls:    map[string]outboundCall{},
+		inboundCalls:     map[string]context.CancelFunc{},
 		pendingIntercept: map[string]chan extproto.EventInterceptResponseFromExt{},
 		eventSubs:        map[string]struct{}{},
 		interceptSubs:    map[string]struct{}{},
@@ -786,10 +794,12 @@ func (m *Manager) spawn(ctx context.Context, ext *Extension) error {
 	// Trust the manifest's name; ignore mismatch from the hello.
 	ext.helloAck = true
 	ext.toolCancel = slices.Contains(hello.Capabilities, "tool_cancel")
+	ext.callTool = slices.Contains(hello.Capabilities, "call_tool")
 
 	ack, _ := extproto.Encode(extproto.HelloAckFromHost{
 		Type:            "hello_ack",
 		ProtocolVersion: extproto.ProtocolVersion,
+		Capabilities:    []string{"call_tool"},
 		ZotVersion:      m.zotVersion,
 		Provider:        m.provider,
 		Model:           m.model,
@@ -882,6 +892,11 @@ func (m *Manager) assumeReadyAfterIdle(ext *Extension) {
 // Returns when stdout closes.
 func (m *Manager) readLoop(ext *Extension, scanner *bufio.Scanner) {
 	defer func() {
+		ext.mu.Lock()
+		for _, cancel := range ext.inboundCalls {
+			cancel()
+		}
+		ext.mu.Unlock()
 		if ext.stdin != nil {
 			_ = ext.stdin.Close()
 		}
@@ -993,6 +1008,34 @@ func (m *Manager) readLoop(ext *Extension, scanner *bufio.Scanner) {
 					default:
 					}
 				}
+			}
+		case "call_tool":
+			var req extproto.CallToolFromExt
+			if json.Unmarshal(line, &req) == nil && req.ID != "" {
+				ext.mu.Lock()
+				if ext.inboundCalls == nil {
+					ext.inboundCalls = make(map[string]context.CancelFunc)
+				}
+				_, duplicate := ext.inboundCalls[req.ID]
+				if !duplicate {
+					parent, found := ext.outboundCalls[req.ParentID]
+					activeOutbound := len(ext.outboundCalls) > 0
+					base := context.Background()
+					if req.ParentID != "" && found {
+						base = parent.ctx
+					}
+					ctx, cancel := context.WithTimeout(base, 60*time.Second)
+					ext.inboundCalls[req.ID] = cancel
+					go m.handleCallTool(ctx, ext, req, cancel, found, activeOutbound, parent.chain)
+				}
+				ext.mu.Unlock()
+			}
+		case "call_tool_cancel":
+			ext.mu.Lock()
+			cancel := ext.inboundCalls[frame.ID]
+			ext.mu.Unlock()
+			if cancel != nil {
+				cancel()
 			}
 		case "tool_result":
 			var tr extproto.ToolResultFromExt
@@ -1257,12 +1300,23 @@ func (m *Manager) InvokeTool(ctx context.Context, name string, args json.RawMess
 
 	id := newCorrelationID()
 	ch := make(chan extproto.ToolResultFromExt, 1)
+	chain, _ := ctx.Value(toolChainKey{}).([]string)
+	if len(chain) == 0 || chain[len(chain)-1] != name {
+		chain = append(append([]string(nil), chain...), name)
+	}
+	callCtx, callCancel := context.WithCancel(ctx)
 	ext.mu.Lock()
 	ext.pendingTool[id] = ch
+	if ext.outboundCalls == nil {
+		ext.outboundCalls = make(map[string]outboundCall)
+	}
+	ext.outboundCalls[id] = outboundCall{ctx: callCtx, chain: chain}
 	ext.mu.Unlock()
 	defer func() {
+		callCancel()
 		ext.mu.Lock()
 		delete(ext.pendingTool, id)
+		delete(ext.outboundCalls, id)
 		ext.mu.Unlock()
 	}()
 

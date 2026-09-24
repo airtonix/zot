@@ -106,7 +106,8 @@ func TestNotificationPrecedesInterceptOnWire(t *testing.T) {
 	m := New(t.TempDir(), "/work", "test", "", "", nil)
 	frames, ext := lifecyclePeer(t, m, "tool_call")
 	ext.interceptSubs["tool_call"] = struct{}{}
-	m.EmitEvent(extproto.EventFromHost{Event: "tool_call", ToolID: "call"})
+	defer m.TrackToolCall("call", "caller")()
+	m.EmitEvent(extproto.EventFromHost{Event: "tool_call", ToolID: "call", OriginExtension: "caller"})
 	result := make(chan InterceptResult, 1)
 	go func() { result <- m.InterceptToolCall(context.Background(), "call", "bash", json.RawMessage(`{}`)) }()
 	var event extproto.EventFromHost
@@ -116,7 +117,7 @@ func TestNotificationPrecedesInterceptOnWire(t *testing.T) {
 	}
 	var intercept extproto.EventInterceptFromHost
 	json.Unmarshal(nextLifecycleFrame(t, frames), &intercept)
-	if intercept.Type != "event_intercept" {
+	if intercept.Type != "event_intercept" || intercept.OriginExtension != "caller" {
 		t.Fatalf("second frame: %+v", intercept)
 	}
 	ext.mu.Lock()

@@ -39,7 +39,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"sync"
+	"sync/atomic"
 
 	"github.com/patriceckhart/zot/packages/agent/extproto"
 )
@@ -307,6 +309,10 @@ type Extension struct {
 	descriptions  []descTuple // ordered so register frames arrive in registration order
 	tools         map[string]InteractiveToolHandler
 	toolCancels   map[string]context.CancelFunc
+	pendingCalls  map[string]chan extproto.ToolResultFromHost
+	callSeq       atomic.Uint64
+	callToolReady atomic.Bool
+	done          chan struct{}
 	toolDefs      []toolDef // ordered so register frames arrive in registration order
 	eventHandlers map[string]EventHandler
 	eventNames    []string // declared subscription order
@@ -364,10 +370,12 @@ func New(name, version string) *Extension {
 		commands:      map[string]CommandHandler{},
 		tools:         map[string]InteractiveToolHandler{},
 		toolCancels:   map[string]context.CancelFunc{},
+		pendingCalls:  map[string]chan extproto.ToolResultFromHost{},
+		done:          make(chan struct{}),
 		eventHandlers: map[string]EventHandler{},
 		panelKeys:     map[string]func(key, text string){},
 		panelCloses:   map[string]func(){},
-		caps:          []string{"commands", "tools", "events", "panels", "tool_cancel"},
+		caps:          []string{"commands", "tools", "events", "panels", "tool_cancel", "call_tool"},
 	}
 }
 
@@ -556,6 +564,7 @@ func (e *Extension) Notify(level, message string) {
 // Run starts the protocol loop. Blocks until stdin closes (zot has
 // shut us down). Returns the first fatal error, or nil on clean exit.
 func (e *Extension) Run() error {
+	defer close(e.done)
 	defer func() {
 		e.mu.Lock()
 		defer e.mu.Unlock()
@@ -588,6 +597,7 @@ func (e *Extension) Run() error {
 	if ack.Type != "hello_ack" {
 		return fmt.Errorf("first host frame must be hello_ack (got %q)", ack.Type)
 	}
+	e.callToolReady.Store(slices.Contains(ack.Capabilities, "call_tool"))
 	e.host = HostInfo{
 		ProtocolVersion: ack.ProtocolVersion,
 		ZotVersion:      ack.ZotVersion,
@@ -704,7 +714,7 @@ func (e *Extension) Run() error {
 				e.respondTool(tc.ID, TextErrorResult(fmt.Sprintf("no handler for tool %q", tc.Name)))
 				continue
 			}
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(context.WithValue(context.Background(), parentCallKey{}, tc.ID))
 			e.mu.Lock()
 			e.toolCancels[tc.ID] = cancel
 			e.mu.Unlock()
@@ -725,6 +735,19 @@ func (e *Extension) Run() error {
 					e.respondTool(id, res)
 				}
 			}(tc.ID, fn, tc.Args)
+		case "tool_result":
+			var tr extproto.ToolResultFromHost
+			if json.Unmarshal(line, &tr) == nil {
+				e.mu.Lock()
+				ch := e.pendingCalls[tr.ID]
+				e.mu.Unlock()
+				if ch != nil {
+					select {
+					case ch <- tr:
+					default:
+					}
+				}
+			}
 		case "tool_cancel":
 			var tc extproto.ToolCancelFromHost
 			if json.Unmarshal(line, &tc) != nil {

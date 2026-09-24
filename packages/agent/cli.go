@@ -352,6 +352,7 @@ func wireNonInteractiveAgentExtHooks(ctx context.Context, ag *core.Agent, extMgr
 	if ag == nil || extMgr == nil {
 		return
 	}
+	extMgr.SetToolCaller(extensionToolCaller(extMgr, func() *core.Agent { return ag }))
 	wireBeforeAgentStart(ag, extMgr, "")
 	ag.BeforeToolExecuteContext = func(ctx context.Context, call provider.ToolCallBlock) (bool, string, json.RawMessage) {
 		res := extMgr.InterceptToolCall(ctx, call.ID, call.Name, call.Arguments)
@@ -1536,14 +1537,17 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		},
 	})
 
+	extMgr.SetToolCaller(extensionToolCaller(extMgr, func() *core.Agent { return liveInteractiveAgent(iv, ag) }))
+
 	// Bind the interactive TUI as the Confirmer. We deferred this
 	// until now because the gate is constructed before the TUI
 	// (the BeforeToolExecute closure captures it). SetConfirmer
 	// is mutex-guarded on the gate so this is safe.
 	if confirmGate != nil {
 		confirmGate.SetConfirmer(&confirmationEventConfirmer{
-			inner: iv,
-			emit:  extMgr.EmitEvent,
+			inner:  iv,
+			emit:   extMgr.EmitEvent,
+			origin: extMgr.ToolCallOrigin,
 		})
 	}
 
