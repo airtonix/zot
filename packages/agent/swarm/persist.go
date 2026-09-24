@@ -180,8 +180,8 @@ func (f *Swarm) Reload() (loaded int, errs []error) {
 	return loaded, errs
 }
 
-// detachedReplayBytes is the initial replay window. Expand it when a
-// sparse transcript or a large event leaves relevant history outside it.
+// detachedReplayBytes bounds startup replay; full history is loaded
+// when the dashboard is opened or the agent is resumed.
 const detachedReplayBytes = 4 << 20
 
 // buildDetachedAgent constructs an Agent from a meta.json with no
@@ -227,43 +227,34 @@ func (f *Swarm) buildDetachedAgent(m agentMeta) *Agent {
 	// effort: a missing or unreadable log just leaves the agent
 	// detached with an empty transcript.
 	if a.EventLogPath != "" {
-		replayDetachedEventLog(a)
+		if evs, err := ReadEventLogTail(a.EventLogPath, detachedReplayBytes); err == nil {
+			replayEventsIntoAgent(a, evs)
+		}
+		if fi, err := os.Stat(a.EventLogPath); err == nil && fi.Size() > detachedReplayBytes {
+			a.needsFullReplay = true
+		}
 	}
 	return a
 }
 
-// replayDetachedEventLog starts at the end of the file, expanding the
-// window only when the bounded transcript or latest assistant reply may
-// still depend on earlier events. In sparse logs, preserving those fields
-// can require reading the entire file.
-func replayDetachedEventLog(a *Agent) {
-	fi, err := os.Stat(a.EventLogPath)
+// loadFullTranscript backfills a detached agent on demand. Keep the
+// status inferred from the newest lifecycle event in the startup tail.
+// The agent's mutex serializes concurrent dashboard refreshes and resume.
+func (a *Agent) loadFullTranscript() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if !a.needsFullReplay {
+		return
+	}
+	evs, err := ReadEventLog(a.EventLogPath)
 	if err != nil {
 		return
 	}
-	size := fi.Size()
-	limit := int64(detachedReplayBytes)
-	for {
-		evs, err := ReadEventLogTail(a.EventLogPath, limit)
-		if err != nil {
-			return
-		}
-		if limit >= size {
-			replayEventsIntoAgent(a, evs)
-			return
-		}
-		trial := &Agent{status: StatusDetached, activity: "detached"}
-		replayEventsIntoAgent(trial, evs)
-		if len(trial.transcript) == 2000 && trial.lastAssistant != "" {
-			replayEventsIntoAgent(a, evs)
-			return
-		}
-		if limit >= size/2 {
-			limit = size
-		} else {
-			limit *= 2
-		}
-	}
+	full := &Agent{status: StatusDetached, activity: "detached"}
+	replayEventsIntoAgent(full, evs)
+	a.transcript = full.transcript
+	a.lastAssistant = full.lastAssistant
+	a.needsFullReplay = false
 }
 
 // replayEventsIntoAgent re-derives an agent's transcript and last
@@ -369,6 +360,7 @@ func (f *Swarm) Resume(ctx context.Context, id string) (*Agent, error) {
 	if st == StatusRunning || st == StatusPending {
 		return nil, fmt.Errorf("swarm: agent %s is still %s; stop it first", existing.ID, st)
 	}
+	existing.loadFullTranscript()
 
 	// Rebuild from the meta record so we don't carry stale runner
 	// state from a previous incarnation. The inbox is transient and

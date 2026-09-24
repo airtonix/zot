@@ -540,7 +540,8 @@ func (a *Agent) Snapshot() AgentSnapshot {
 }
 
 // SnapshotAll returns snapshots of every agent in creation order,
-// scoped to the active session when one is set.
+// scoped to the active session when one is set. Opening the dashboard
+// backfills large detached logs once, rather than delaying startup.
 //
 // Scoping rules:
 //   - activeSession == "": no filter, every agent is returned
@@ -561,6 +562,7 @@ func (f *Swarm) SnapshotAll() []AgentSnapshot {
 		if active != "" && a.SessionID != "" && a.SessionID != active {
 			continue
 		}
+		a.loadFullTranscript()
 		out = append(out, a.Snapshot())
 	}
 	// Sort by start time for a stable, deterministic listing.

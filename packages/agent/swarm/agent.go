@@ -69,8 +69,10 @@ type Agent struct {
 	activity      string
 	transcript    []string
 	lastAssistant string
-	finished      time.Time
-	lastErr       error
+	// Large detached logs are loaded in full only when their transcript is viewed or resumed.
+	needsFullReplay bool
+	finished        time.Time
+	lastErr         error
 
 	// OnTurnEnd, if set, fires once per prompt-level turn_end event
 	// emitted by the swarm daemon wrapper. Provider/tool-loop
