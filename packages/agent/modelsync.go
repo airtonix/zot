@@ -255,6 +255,14 @@ func refreshModels() {
 				all = append(all, live...)
 			}
 		}
+		if cred, _, err := resolveCredentialForBackground(ctx, "amazon-bedrock"); err == nil {
+			// Bedrock discovery + pricing needs SigV4 credentials
+			// (env keys or AWS_PROFILE); a bearer-only setup returns
+			// (nil, nil) and is skipped inside DiscoverBedrock.
+			if live, err := provider.DiscoverBedrock(ctx, cred, ""); err == nil {
+				all = append(all, live...)
+			}
+		}
 		if haveOpenRouter {
 			// /models is public; gate on a credential so the picker only
 			// fills with OpenRouter's hundreds of routes for users who use it.
