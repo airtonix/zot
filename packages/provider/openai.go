@@ -263,6 +263,9 @@ func (c *openaiClient) buildRequest(req Request) (*oaiRequest, error) {
 			out.MaxCompletionTok = &maxTok
 		}
 		effort := OpenAIReasoningEffort(reasoning)
+		if c.Name() == "deepseek" && reasoning == "max" {
+			effort = "max"
+		}
 		if usesAdaptiveThinking(m) {
 			// Some gateways expose adaptive-thinking Anthropic models through
 			// the OpenAI-compatible chat-completions wire. They accept the

@@ -13,6 +13,7 @@ func TestAvailableReasoningLevels(t *testing.T) {
 	}{
 		{name: "unsupported", model: Model{}, want: []string{""}},
 		{name: "generic openai", model: Model{Reasoning: true}, want: []string{"", "low", "medium", "high"}},
+		{name: "direct deepseek", model: Model{Provider: "deepseek", Reasoning: true}, want: []string{"", "low", "high", "max"}},
 		{name: "responses", model: Model{Reasoning: true, API: APIResponses, ID: "gpt-5.5"}, want: []string{"", "low", "medium", "high", "xhigh"}},
 		{name: "responses native max", model: Model{Reasoning: true, API: APIResponses, ID: "gpt-5.6-sol"}, want: []string{"", "low", "medium", "high", "xhigh", "max"}},
 		{name: "astra native max", model: Model{Reasoning: true, API: APIResponses, ID: "gpt-6-astra"}, want: []string{"", "low", "medium", "high", "xhigh", "max"}},
@@ -63,6 +64,8 @@ func TestClampReasoningForModel(t *testing.T) {
 	}{
 		{name: "unsupported", model: Model{}, level: "high", want: ""},
 		{name: "generic max", model: Model{Reasoning: true}, level: "max", want: "high"},
+		{name: "deepseek xhigh maps to high", model: Model{Provider: "deepseek", Reasoning: true}, level: "xhigh", want: "high"},
+		{name: "deepseek max stays max", model: Model{Provider: "deepseek", Reasoning: true}, level: "max", want: "max"},
 		{name: "adaptive minimum", model: Model{Reasoning: true, AdaptiveThinking: true}, level: "minimum", want: "low"},
 		{name: "gemini pro medium", model: Model{Provider: "google", ID: "gemini-3-pro", Reasoning: true}, level: "medium", want: "high"},
 		{name: "native max", model: Model{Reasoning: true, API: APIResponses, ID: "gpt-5.6-sol"}, level: "max", want: "max"},
@@ -86,6 +89,34 @@ func TestClampReasoningForModel(t *testing.T) {
 				t.Fatalf("level = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDeepSeekReasoningEffort(t *testing.T) {
+	client := NewDeepSeek("test", "").(*openaiClient)
+	for _, model := range []string{"deepseek-v4-pro", "deepseek-v4-flash"} {
+		m, err := FindModel("deepseek", model)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := AvailableReasoningLevels(m); !slices.Equal(got, []string{"", "low", "high", "max"}) {
+			t.Fatalf("%s: levels = %q, want off/low/high/max", model, got)
+		}
+		for _, tc := range []struct{ requested, want string }{
+			{"low", "low"},
+			{"medium", "high"},
+			{"high", "high"},
+			{"xhigh", "high"},
+			{"max", "max"},
+		} {
+			wire, err := client.buildRequest(Request{Model: model, Reasoning: tc.requested})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if wire.ReasoningEffort != tc.want {
+				t.Errorf("%s %s: reasoning_effort = %q, want %q", model, tc.requested, wire.ReasoningEffort, tc.want)
+			}
+		}
 	}
 }
 

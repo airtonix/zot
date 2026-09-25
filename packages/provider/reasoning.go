@@ -54,6 +54,10 @@ func defaultReasoningLevels(model Model) []string {
 		}
 		return []string{"", "minimum", "low", "medium", "high"}
 	}
+	if model.Provider == "deepseek" {
+		// DeepSeek maps medium and xhigh to high; max is a distinct effort.
+		return []string{"", "low", "high", "max"}
+	}
 	if model.AdaptiveThinkingCompat {
 		return []string{"", "high"}
 	}
@@ -111,6 +115,9 @@ func ClampReasoningForModel(model Model, level string) string {
 		if candidate == normalized {
 			return candidate
 		}
+	}
+	if model.Provider == "deepseek" && (normalized == "medium" || normalized == "xhigh") && containsReasoningLevel(available, "high") {
+		return "high"
 	}
 	return nearestReasoningLevel(available, normalized)
 }

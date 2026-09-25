@@ -701,7 +701,7 @@ By default this uses:
 - model: `deepseek-v4-pro`
 - base URL: `https://api.deepseek.com/v1`
 
-Catalog ships with `deepseek-v4-pro` (reasoning) and `deepseek-v4-flash`. These are exactly the IDs returned by `GET https://api.deepseek.com/models` today. You can add additional model IDs to `models.json` under the `deepseek` provider.
+Catalog ships with `deepseek-v4-pro` (reasoning) and `deepseek-v4-flash`. These are exactly the IDs returned by `GET https://api.deepseek.com/models` today. You can add additional model IDs to `models.json` under the `deepseek` provider. For direct DeepSeek reasoning models, `/reasoning` offers off, low, high, and max. DeepSeek maps medium and xhigh to high, while max sends the distinct `reasoning_effort: "max"` value. Other OpenAI-compatible providers retain their own effort limits.
 
 Credential lookup order for DeepSeek:
 
