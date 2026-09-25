@@ -84,14 +84,16 @@ type ContentBlock struct {
 }
 
 type CommandResponseFromExt struct {
-	Type      string     `json:"type"`
-	ID        string     `json:"id"`
-	Action    string     `json:"action"`
-	Prompt    string     `json:"prompt,omitempty"`
-	Insert    string     `json:"insert,omitempty"`
-	Display   string     `json:"display,omitempty"`
-	OpenPanel *PanelSpec `json:"open_panel,omitempty"`
-	Error     string     `json:"error,omitempty"`
+	Type      string          `json:"type"`
+	ID        string          `json:"id"`
+	Action    string          `json:"action"`
+	Prompt    string          `json:"prompt,omitempty"`
+	ToolName  string          `json:"tool_name,omitempty"`
+	ToolArgs  json.RawMessage `json:"tool_args,omitempty"`
+	Insert    string          `json:"insert,omitempty"`
+	Display   string          `json:"display,omitempty"`
+	OpenPanel *PanelSpec      `json:"open_panel,omitempty"`
+	Error     string          `json:"error,omitempty"`
 }
 
 type PanelSpec struct {

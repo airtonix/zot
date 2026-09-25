@@ -592,6 +592,36 @@ func TestGeminiBuildRequestWithReasoningReplay(t *testing.T) {
 	}
 }
 
+// TestGeminiSyntheticToolCallSignature checks the documented Gemini 3
+// placeholder without changing model-generated calls or their signatures.
+func TestGeminiSyntheticToolCallSignature(t *testing.T) {
+	client := NewGemini("key", "https://example.invalid").(*geminiClient)
+	cases := []struct {
+		name, model, signature, metadata, want string
+	}{
+		{"synthetic Gemini 3", "gemini-3-flash-preview", "", "true", "skip_thought_signature_validator"},
+		{"synthetic Gemini 2.5", "gemini-2.5-pro", "", "true", ""},
+		{"genuine unsigned call", "gemini-3-flash-preview", "", "", ""},
+		{"preserve signed call", "gemini-3-flash-preview", "api-signature", "true", "api-signature"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			call := ToolCallBlock{ID: "id", Name: "skill", Arguments: json.RawMessage(`{"name":"test"}`), ThoughtSignature: tc.signature}
+			wire, _, err := client.buildRequest(Request{Model: tc.model, Messages: []Message{
+				{Role: RoleUser, Content: []Content{TextBlock{Text: "request"}}},
+				{Role: RoleAssistant, Content: []Content{call}, Meta: map[string]string{"synthetic_tool_call": tc.metadata}},
+				{Role: RoleTool, Content: []Content{ToolResultBlock{CallID: "id", Content: []Content{TextBlock{Text: "instructions"}}}}},
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(wire.Contents) != 3 || len(wire.Contents[1].Parts) != 1 || wire.Contents[1].Parts[0].FunctionCall == nil || wire.Contents[1].Parts[0].ThoughtSignature != tc.want || call.ThoughtSignature != tc.signature {
+				t.Fatalf("wire = %+v, input call = %+v", wire.Contents, call)
+			}
+		})
+	}
+}
+
 // TestGeminiStreamToolCallWithThoughtSignature confirms that a tool call
 // featuring a thoughtSignature in the SSE stream successfully extracts and
 // attaches the thought signature onto the final ToolCallBlock.

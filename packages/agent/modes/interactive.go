@@ -509,6 +509,7 @@ type Interactive struct {
 	// already appended to the agent transcript, avoiding a duplicate message.
 	pendingCompactPrompt    string
 	pendingCompactImages    []provider.ImageBlock
+	pendingCompactTool      *toolPromptRequest
 	hasPendingCompactPrompt bool
 	continueAfterCompact    bool
 
@@ -3145,6 +3146,18 @@ func (i *Interactive) invokeExtensionCommand(ctx context.Context, name, args str
 			return
 		}
 		i.startTurn(i.runCtx, resp.Prompt)
+	case "tool_prompt":
+		if strings.TrimSpace(resp.Prompt) == "" || resp.ToolName == "" || !json.Valid(resp.ToolArgs) || !strings.HasPrefix(strings.TrimSpace(string(resp.ToolArgs)), "{") {
+			i.mu.Lock()
+			i.statusErr = "extension /" + name + ": invalid tool_prompt"
+			i.mu.Unlock()
+			i.invalidate()
+			return
+		}
+		i.startTurnWithPrelude(i.runCtx, resp.Prompt, nil, &toolPromptRequest{
+			call:   provider.ToolCallBlock{ID: "ext-prompt-" + resp.ID, Name: resp.ToolName, Arguments: resp.ToolArgs},
+			origin: i.cfg.Extensions.CommandOwner(name),
+		})
 	case "insert":
 		i.ed.Insert(resp.Insert)
 		i.invalidate()
@@ -5876,6 +5889,7 @@ func (i *Interactive) handleAuthEvent(ev auth.Event) {
 func (i *Interactive) clearPendingCompactTurnLocked() {
 	i.pendingCompactPrompt = ""
 	i.pendingCompactImages = nil
+	i.pendingCompactTool = nil
 	i.hasPendingCompactPrompt = false
 	i.continueAfterCompact = false
 	i.pendingPostCompactNote = ""
@@ -5934,6 +5948,7 @@ func (i *Interactive) runCompact(parent context.Context, auto bool) {
 		// prompts typed during compaction remain in the host queue.
 		var next string
 		var nextImages []provider.ImageBlock
+		var nextTool *toolPromptRequest
 		var hasNext bool
 		var continueExisting bool
 
@@ -5988,6 +6003,8 @@ func (i *Interactive) runCompact(parent context.Context, auto bool) {
 			case i.hasPendingCompactPrompt:
 				next = i.pendingCompactPrompt
 				nextImages = i.pendingCompactImages
+				nextTool = i.pendingCompactTool
+				i.pendingCompactTool = nil
 				i.pendingCompactPrompt = ""
 				i.pendingCompactImages = nil
 				i.hasPendingCompactPrompt = false
@@ -6014,7 +6031,7 @@ func (i *Interactive) runCompact(parent context.Context, auto bool) {
 			if continueExisting {
 				i.startTurnRequest(p, "", nil, true)
 			} else {
-				i.startTurnWithImages(p, next, nextImages)
+				i.startTurnWithPrelude(p, next, nextImages, nextTool)
 			}
 		}
 	}()
@@ -6152,10 +6169,23 @@ func (i *Interactive) startTurn(parent context.Context, prompt string) {
 }
 
 func (i *Interactive) startTurnWithImages(parent context.Context, prompt string, images []provider.ImageBlock) {
-	i.startTurnRequest(parent, prompt, images, false)
+	i.startTurnWithPrelude(parent, prompt, images, nil)
+}
+
+type toolPromptRequest struct {
+	call   provider.ToolCallBlock
+	origin string
+}
+
+func (i *Interactive) startTurnWithPrelude(parent context.Context, prompt string, images []provider.ImageBlock, tool *toolPromptRequest) {
+	i.startTurnRequestWithPrelude(parent, prompt, images, false, tool)
 }
 
 func (i *Interactive) startTurnRequest(parent context.Context, prompt string, images []provider.ImageBlock, overflowRecoveryAttempted bool) {
+	i.startTurnRequestWithPrelude(parent, prompt, images, overflowRecoveryAttempted, nil)
+}
+
+func (i *Interactive) startTurnRequestWithPrelude(parent context.Context, prompt string, images []provider.ImageBlock, overflowRecoveryAttempted bool, tool *toolPromptRequest) {
 	if i.agent == nil {
 		// Text startup pre cannot run without credentials; continue so
 		// deferred InitialInput (pre-fill or auto-submit) still applies.
@@ -6177,6 +6207,7 @@ func (i *Interactive) startTurnRequest(parent context.Context, prompt string, im
 	if needsPreCompact {
 		i.pendingCompactPrompt = prompt
 		i.pendingCompactImages = append([]provider.ImageBlock(nil), images...)
+		i.pendingCompactTool = tool
 		i.hasPendingCompactPrompt = true
 		i.statusErr = ""
 		i.extNotes = append(i.extNotes, autoCompactNoteLine(i.cfg.Theme, "context near limit — condensing history before sending..."))
@@ -6241,6 +6272,10 @@ func (i *Interactive) startTurnRequest(parent context.Context, prompt string, im
 		var err error
 		if overflowRecoveryAttempted {
 			err = i.agent.Continue(ctx, sink)
+		} else if tool != nil {
+			stopTracking := i.cfg.Extensions.TrackToolCall(tool.call.ID, tool.origin)
+			err = i.agent.PromptWithTool(ctx, prompt, tool.call, tool.origin, sink)
+			stopTracking()
 		} else {
 			err = i.agent.Prompt(ctx, prompt, images, sink)
 		}

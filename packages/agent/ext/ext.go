@@ -255,8 +255,10 @@ type Panel struct {
 }
 
 type Response struct {
-	Action    string // "prompt", "insert", "display", "open_panel", "noop"
+	Action    string // "prompt", "tool_prompt", "insert", "display", "open_panel", "noop"
 	Prompt    string
+	ToolName  string
+	ToolArgs  json.RawMessage
 	Insert    string
 	Display   string
 	OpenPanel *Panel
@@ -267,6 +269,20 @@ type Response struct {
 // to the agent (running it through the model loop as if the user had
 // typed and pressed enter).
 func Prompt(text string) Response { return Response{Action: "prompt", Prompt: text} }
+
+// ToolPrompt asks the host to run a tool and show its result to the model
+// after text has been submitted as a user prompt. Unlike CallTool, execution
+// takes place after the command handler returns and is not returned to it.
+func ToolPrompt(name string, args any, text string) Response {
+	if name == "" || text == "" {
+		return Errorf("tool_prompt requires a name and prompt")
+	}
+	data, err := json.Marshal(args)
+	if err != nil || len(data) == 0 || data[0] != '{' {
+		return Errorf("tool_prompt args must be a JSON object")
+	}
+	return Response{Action: "tool_prompt", Prompt: text, ToolName: name, ToolArgs: data}
+}
 
 // Insert returns a Response that drops text into the editor at the
 // cursor without submitting.
@@ -837,6 +853,8 @@ func (e *Extension) respond(id string, r Response) {
 		ID:        id,
 		Action:    r.Action,
 		Prompt:    r.Prompt,
+		ToolName:  r.ToolName,
+		ToolArgs:  r.ToolArgs,
 		Insert:    r.Insert,
 		Display:   r.Display,
 		OpenPanel: panel,

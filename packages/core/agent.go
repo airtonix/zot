@@ -345,6 +345,20 @@ func (a *Agent) fireMessageAppended(m provider.Message) {
 // stops or an error occurs. Events are delivered via sink in order.
 // sink must not block the caller for long; buffer as needed.
 func (a *Agent) Prompt(ctx context.Context, text string, images []provider.ImageBlock, sink func(AgentEvent)) error {
+	return a.promptWithPrelude(ctx, text, images, nil, "", sink)
+}
+
+// PromptWithTool runs a host-requested tool after the user prompt and before
+// the first model turn. The call and result are persisted as a matched pair.
+// A cancelled execution still records its result, but does not call the model.
+func (a *Agent) PromptWithTool(ctx context.Context, text string, call provider.ToolCallBlock, origin string, sink func(AgentEvent)) error {
+	if strings.TrimSpace(text) == "" || call.ID == "" || call.Name == "" || !json.Valid(call.Arguments) || !strings.HasPrefix(strings.TrimSpace(string(call.Arguments)), "{") {
+		return fmt.Errorf("tool prompt requires text, tool ID, name and JSON object arguments")
+	}
+	return a.promptWithPrelude(ctx, text, nil, &call, origin, sink)
+}
+
+func (a *Agent) promptWithPrelude(ctx context.Context, text string, images []provider.ImageBlock, call *provider.ToolCallBlock, origin string, sink func(AgentEvent)) error {
 	if sink == nil {
 		sink = func(AgentEvent) {}
 	}
@@ -368,6 +382,40 @@ func (a *Agent) Prompt(ctx context.Context, text string, images []provider.Image
 	a.fireMessageAppended(user)
 	sink(EvUserMessage{Message: user})
 
+	if call != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		sink(EvToolCall{ID: call.ID, Name: call.Name, Args: call.Arguments})
+		result := a.runOneTool(ctx, *call, sink)
+		assistant := provider.Message{Role: provider.RoleAssistant, Content: []provider.Content{*call}, Time: time.Now(), Meta: map[string]string{"origin_extension": origin, "synthetic_tool_call": "true"}}
+		tool := provider.Message{Role: provider.RoleTool, Content: []provider.Content{provider.ToolResultBlock{CallID: call.ID, Content: result.Content, IsError: result.IsError}}, Time: time.Now()}
+		for _, name := range result.ActivateTools {
+			if _, err := a.Tools.Get(name); err == nil && !containsString(tool.AddedToolNames, name) {
+				tool.AddedToolNames = append(tool.AddedToolNames, name)
+			}
+		}
+		var mirror provider.Message
+		if a.Client != nil && (a.Client.Name() == "openai" || a.Client.Name() == "openai-codex") {
+			mirror = mirrorToolImagesAsUser(tool)
+		}
+		a.mu.Lock()
+		a.messages = append(a.messages, assistant, tool)
+		a.rev += 2
+		if len(mirror.Content) > 0 {
+			a.messages = append(a.messages, mirror)
+			a.rev++
+		}
+		a.mu.Unlock()
+		a.fireMessageAppended(assistant)
+		a.fireMessageAppended(tool)
+		if len(mirror.Content) > 0 {
+			a.fireMessageAppended(mirror)
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
 	return a.runLoop(ctx, sink)
 }
 

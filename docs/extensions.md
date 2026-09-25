@@ -426,6 +426,16 @@ chain. `before_agent_start` follows the non-blocking replacement rules above.
 
 - `"prompt"` — submits `prompt` as a fresh user message; the agent
   runs a turn against it.
+- `"tool_prompt"`: submits `prompt`, executes `tool_name` with JSON-object
+  `tool_args` through the active agent's normal tool guards and confirmation,
+  then records a paired assistant tool call and tool result before the model
+  turn. The full tool output is stored in the session and visible to the
+  model, so extensions should only request this for content intended to be
+  persistent model context. Tool errors are recorded as tool errors.
+  Cancellation stops before the model turn and preserves any completed
+  call/result pair. This action is supported for interactive slash commands,
+  not spontaneous `call_tool` requests. The extension does not receive the
+  tool result in the response.
 - `"insert"` — inserts `insert` into the editor at the cursor without
   submitting.
 - `"display"` — appends `display` to the chat as a one-shot styled
@@ -435,6 +445,27 @@ chain. `before_agent_start` follows the non-blocking replacement rules above.
 - `"noop"` — the extension handled it itself (e.g. it pushed
   `notify` frames or kicked off background work). zot doesn't change
   the UI in response.
+
+For a skill shortcut, return the request without copying the skill output
+into the prompt:
+
+```json
+{"type":"command_response","id":"...","action":"tool_prompt",
+ "prompt":"and push","tool_name":"skill",
+ "tool_args":{"name":"developer:commit"}}
+```
+
+Go SDK: `return ext.ToolPrompt("skill", map[string]string{"name": "developer:commit"}, args)`.
+Unlike `CallTool`, this executes after the command handler returns. Avoid
+calling the same tool in the handler or the work will run twice. The recorded
+assistant call includes `origin_extension` metadata. Older hosts do not
+understand the new action and report an unknown action instead of running it.
+For Gemini 3, zot adds Google's documented
+[`skip_thought_signature_validator`](https://ai.google.dev/gemini-api/docs/generate-content/thought-signatures)
+placeholder to unsigned synthetic function calls when serializing requests.
+Provider-issued thought signatures are preserved. The extension-to-Gemini
+request and session replay are covered with a local Gemini-compatible server,
+not a live Gemini API round trip.
 
 Example:
 
