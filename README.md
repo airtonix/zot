@@ -544,7 +544,7 @@ Use `/login` to store API keys or subscription credentials. `/model` only shows 
 `--list-models` or the `/model` picker shows the full catalog across all built-in providers. Three sources:
 
 - **Catalog**: models baked into zot, covering Claude, GPT/Codex, Gemini/Gemma, Kimi/Moonshot, DeepSeek, Groq-hosted Llama/Gemma/Compound, OpenRouter-routed models, Bedrock model ids, Vertex model ids, Azure OpenAI deployments, Copilot models, and other provider-specific catalog entries.
-- **Live**: IDs discovered from `GET /v1/models` using your stored API key (cached for 6h in `$ZOT_HOME/models-cache.json`, refreshed in the background on startup).
+- **Live**: IDs discovered from the provider using your stored credentials — usually `GET /v1/models`, or provider-specific listing APIs for Amazon Bedrock (see [Amazon Bedrock](#amazon-bedrock)). Cached for 6h in `$ZOT_HOME/models-cache.json` and refreshed in the background on startup.
 - **Speculative**: IDs that appear in the upstream generator but aren't live on the public API yet. They'll 404 today and start working the moment the provider ships them.
 
 The context meter in the status line uses the model's advertised context window to show how much of it your last turn consumed.
@@ -784,6 +784,30 @@ Two credential file shapes are supported:
 Access tokens are cached in memory and refreshed on demand.
 
 If none of these are available, zot errors with `vertex: no auth — set GOOGLE_CLOUD_API_KEY or GOOGLE_APPLICATION_CREDENTIALS`.
+
+### Amazon Bedrock
+
+zot talks to Bedrock's Converse streaming API and supports two credential styles:
+
+- **Bedrock API key** (bearer token) via `AWS_BEARER_TOKEN_BEDROCK`. This is the simplest setup: a single opaque string, region-scoped to wherever it was minted. It requires only the `bedrock:CallWithBearerToken` permission.
+- **SigV4** via `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (plus optional `AWS_SESSION_TOKEN`), an `AWS_PROFILE`, or an SSO / assume-role / `credential_process` profile resolved through the AWS CLI. SigV4 (AWS Signature Version 4) is AWS's request-signing scheme: your secret key signs each request locally and only the signature travels over the wire. zot implements it directly so it does not depend on the AWS SDK.
+
+If both are present, the bearer token wins for inference. The region defaults to `AWS_REGION` / `AWS_DEFAULT_REGION`, falling back to `us-east-1`. A `403` on a freshly-copied API key almost always means a region mismatch — set `AWS_REGION` to the region the key was created in, or pass `--base-url https://bedrock-runtime.<region>.amazonaws.com`.
+
+#### Catalog vs. live discovery
+
+Unlike most providers, Bedrock model **pricing, context windows, and capability flags are hand-maintained** in zot's baked-in catalog. AWS does not expose usable pricing programmatically for current models — its Price List API returns only stale, input-only rates for a few legacy models — so the catalog is authoritative for cost and metadata. This means:
+
+- **Bearer-token-only users** still get the full curated Bedrock model list with correct pricing from the catalog. No AWS API listing is attempted.
+- **SigV4 users** additionally get **live model discovery**: on startup, zot lists the foundation models and cross-region inference profiles your account can actually use (via `ListFoundationModels` and `ListInferenceProfiles`) and merges them into the catalog. New Bedrock models therefore appear in `/model` without waiting for a zot release. Discovered IDs already known to the catalog keep their curated pricing; genuinely new IDs show up with placeholder pricing until the catalog is updated.
+
+Live discovery requires SigV4 because the listing APIs live on the Bedrock control plane, which rejects the runtime bearer token. It runs in the background at startup and is cached for 6h like other providers, so `/model` reflects the latest list without any manual refresh. If discovery fails (no SigV4 creds, expired SSO login, missing IAM permissions), zot silently falls back to the catalog. Discovery needs `bedrock:ListFoundationModels` and `bedrock:ListInferenceProfiles`.
+
+#### Cross-region pricing caveat
+
+Bedrock model IDs carry a routing prefix: `global.` (global cross-region inference), a geography such as `us.` / `eu.` / `apac.` / `au.` / `jp.` (geo cross-region inference), or none (in-region). zot's catalog prices **every** variant at the model's base (US) rate.
+
+AWS charges a surcharge for **geo cross-region inference** in some regions — for example, Anthropic models routed through the Asia Pacific (Melbourne) geo profile cost about 10% more than the base rate. zot does **not** yet capture these per-region uplifts, so if you use a geo-prefixed profile in a region that charges the surcharge, zot's reported cost may be **lower than your actual AWS bill**. Global cross-region and plain in-region usage match the base rate and are unaffected. The context/usage accounting is still correct; only the dollar figure can under-report in this edge case. If you need exact costs, check the per-region table on the [Amazon Bedrock pricing page](https://aws.amazon.com/bedrock/pricing/).
 
 ### Local models with ollama
 
