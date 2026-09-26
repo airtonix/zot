@@ -5352,20 +5352,12 @@ func (i *Interactive) startOAuthFlow(provider string) {
 		i.dialog.ShowWaiting(loginURL)
 		return
 	}
-	// Always run the manual/copy-code flow in parallel with the local
-	// callback server so headless environments (docker, SSH) can paste
-	// the authorization code directly without first pressing 'p'.
-	_, err := i.cfg.AuthManager.StartOAuth(provider)
+	loginURL, err := i.cfg.AuthManager.StartOAuth(provider)
 	if err != nil {
 		i.dialog.ShowResult(false, err.Error())
 		return
 	}
-	manualURL, mErr := i.cfg.AuthManager.StartManualOAuth(provider)
-	if mErr == nil {
-		i.dialog.ShowWaiting(manualURL)
-	} else {
-		i.dialog.ShowResult(false, mErr.Error())
-	}
+	i.dialog.ShowWaiting(loginURL)
 }
 
 func (i *Interactive) startManualOAuthFlow(provider string) {

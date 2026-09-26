@@ -69,6 +69,22 @@ func TestLoginDialogLlamaCPPValidatesURLAndAcceptsOptionalKey(t *testing.T) {
 	}
 }
 
+func TestLoginDialogOpenAIOAuthDoesNotOfferCopyCode(t *testing.T) {
+	d := newLoginDialog()
+	d.Open(t.TempDir())
+	d.method = "oauth"
+	d.provider = "openai-codex"
+	d.ShowWaiting("http://localhost:1455/auth/callback")
+
+	text := stripANSIBytes(strings.Join(d.Render(tui.Theme{}, 80), "\n"))
+	if strings.Contains(text, "paste the authorization code") {
+		t.Fatal("OpenAI OAuth dialog offers manual code entry")
+	}
+	if !strings.Contains(text, "complete sign-in in the browser") {
+		t.Fatal("OpenAI OAuth dialog does not require browser sign-in")
+	}
+}
+
 func TestLoginDialogCursorPosMatchesPaddedInputRow(t *testing.T) {
 	d := newLoginDialog()
 	d.Open(t.TempDir())

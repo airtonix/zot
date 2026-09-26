@@ -101,6 +101,15 @@ func TestPKCE(t *testing.T) {
 	}
 }
 
+func TestStartManualOAuthRejectsOpenAI(t *testing.T) {
+	m := NewManager(NewStore(filepath.Join(t.TempDir(), "auth.json")))
+	if _, err := m.StartManualOAuth("openai-codex"); err == nil {
+		t.Fatal("expected manual OpenAI OAuth to be rejected")
+	} else if !strings.Contains(err.Error(), "manual code login is not supported") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestAuthorizeURL(t *testing.T) {
 	p, _ := NewPKCE()
 	u, state, err := AnthropicOAuth.AuthorizeURL(p)

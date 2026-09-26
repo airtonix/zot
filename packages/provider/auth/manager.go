@@ -354,8 +354,7 @@ func (m *Manager) StartManualOAuth(provider string) (string, error) {
 	case "anthropic":
 		op = AnthropicManualOAuth
 	case "openai", "openai-codex":
-		op = OpenAIOAuth
-		storeProvider = "openai"
+		return "", fmt.Errorf("openai login requires the browser callback flow; manual code login is not supported")
 	case "google":
 		return "", fmt.Errorf("google login is api-key only; use api key login for gemini")
 	case "deepseek":
