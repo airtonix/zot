@@ -1,6 +1,7 @@
 package modes
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/mattn/go-runewidth"
@@ -18,6 +19,18 @@ type settingsDialog struct {
 	optionCursor int
 	parentItems  []settingsItem
 	parentCursor int
+
+	// MaxRows caps how many rows the dialog renders. The host sets it
+	// from the terminal height before each render; zero renders the
+	// list in full. A list taller than the cap scrolls in a window
+	// that follows the cursor so entries never disappear off-screen.
+	MaxRows int
+
+	// viewTop is the index of the first entry drawn in the current
+	// window. It survives across renders so the window only moves when
+	// the cursor pushes past one of its edges, and is reset whenever
+	// the dialog swaps between the item list and an option list.
+	viewTop int
 }
 
 type settingsItem struct {
@@ -62,6 +75,7 @@ func (d *settingsDialog) Open(items []settingsItem) bool {
 	d.optionCursor = 0
 	d.parentItems = nil
 	d.parentCursor = 0
+	d.viewTop = 0
 	d.active = true
 	return true
 }
@@ -81,6 +95,7 @@ func (d *settingsDialog) OpenDirectOption(item settingsItem) bool {
 	}
 	d.parentItems = nil
 	d.parentCursor = 0
+	d.viewTop = 0
 	d.active = true
 	return true
 }
@@ -90,6 +105,7 @@ func (d *settingsDialog) Close() {
 	d.selecting = false
 	d.direct = false
 	d.parentItems = nil
+	d.viewTop = 0
 }
 func (d *settingsDialog) Active() bool { return d != nil && d.active }
 
@@ -119,6 +135,7 @@ func (d *settingsDialog) HandleKey(k tui.Key) settingsAction {
 			d.cursor = d.parentCursor
 			d.parentItems = nil
 			d.parentCursor = 0
+			d.viewTop = 0
 			d.title = "settings"
 			return settingsAction{}
 		}
@@ -151,6 +168,7 @@ func (d *settingsDialog) handleOptionKey(k tui.Key) settingsAction {
 			return settingsAction{Close: true}
 		}
 		d.selecting = false
+		d.viewTop = 0
 	case tui.KeyEnter:
 		return d.selectCurrentOption()
 	case tui.KeyRune:
@@ -188,6 +206,7 @@ func (d *settingsDialog) toggleCurrent() settingsAction {
 		d.items = it.children
 		d.cursor = 0
 		d.optionCursor = 0
+		d.viewTop = 0
 		d.title = "settings: " + it.label
 		return settingsAction{}
 	}
@@ -197,6 +216,7 @@ func (d *settingsDialog) toggleCurrent() settingsAction {
 			d.optionCursor = 0
 		}
 		d.selecting = true
+		d.viewTop = 0
 		return settingsAction{}
 	}
 	it.value = !it.value
@@ -220,6 +240,7 @@ func (d *settingsDialog) selectCurrentOption() settingsAction {
 	it.choice = d.optionCursor
 	d.items[d.cursor] = it
 	d.selecting = false
+	d.viewTop = 0
 	action := settingsAction{Toggle: true, Key: it.key, StringValue: it.options[it.choice].value}
 	if d.direct {
 		d.Close()
@@ -242,39 +263,175 @@ func (d *settingsDialog) Render(th tui.Theme, width int) []string {
 	} else {
 		lines = append(lines, th.FG256(th.Muted, "change with enter/space, esc to close:"))
 	}
-	for i, it := range d.items {
-		box := "[ ]"
-		if it.value {
-			box = "[✓]"
+
+	// Render every entry to its own block up front so the row window
+	// can count wrapped descriptions, then draw only the blocks that
+	// fit the budget. Windowing keeps the cursor entry on screen: a
+	// list taller than the terminal scrolls instead of having its top
+	// entries clipped off and unreachable.
+	blocks := make([][]string, len(d.items))
+	heights := make([]int, len(d.items))
+	for i := range d.items {
+		blocks[i] = d.itemBlock(th, width, i)
+		heights[i] = len(blocks[i])
+	}
+	budget := d.rowBudget(len(lines) + 1) // one row for the closing rule
+	start, end := d.windowBlocks(heights, d.cursor, budget)
+	lines = append(lines, windowLines(th, blocks, start, end, budget)...)
+	lines = append(lines, frameRule(th, width))
+	return lines
+}
+
+// itemBlock renders one entry as its label row followed by any wrapped
+// description rows. Keeping both in one block lets the row window
+// count the description and trim it when space runs out without losing
+// the label row the cursor highlight sits on.
+func (d *settingsDialog) itemBlock(th tui.Theme, width, idx int) []string {
+	it := d.items[idx]
+	box := "[ ]"
+	if it.value {
+		box = "[✓]"
+	}
+	plain := "  " + box + " " + it.label
+	if it.picker || len(it.children) > 0 {
+		box = "[→]"
+		plain = "  " + box + " " + it.label
+	} else if len(it.options) > 0 {
+		box = "[→]"
+		if it.choice < 0 || it.choice >= len(it.options) {
+			it.choice = 0
 		}
-		plain := "  " + box + " " + it.label
-		if it.picker || len(it.children) > 0 {
-			box = "[→]"
-			plain = "  " + box + " " + it.label
-		} else if len(it.options) > 0 {
-			box = "[→]"
-			if it.choice < 0 || it.choice >= len(it.options) {
-				it.choice = 0
-			}
-			plain = "  " + box + " " + it.label + ": " + it.options[it.choice].label
-		}
-		if it.hint != "" {
-			plain += "  " + th.FG256(th.Muted, "("+it.hint+")")
-		}
-		if it.disabled {
-			lines = append(lines, th.FG256(th.Muted, plain))
-		} else if i == d.cursor {
-			lines = append(lines, th.PadHighlight(plain, width))
-		} else {
-			lines = append(lines, plain)
-		}
-		if it.desc != "" {
-			for _, desc := range wrapSettingDescription(it.desc, width, 6) {
-				lines = append(lines, th.FG256(th.Muted, desc))
-			}
+		plain = "  " + box + " " + it.label + ": " + it.options[it.choice].label
+	}
+	if it.hint != "" {
+		plain += "  " + th.FG256(th.Muted, "("+it.hint+")")
+	}
+	line := plain
+	switch {
+	case it.disabled:
+		line = th.FG256(th.Muted, plain)
+	case idx == d.cursor:
+		line = th.PadHighlight(plain, width)
+	}
+	block := []string{line}
+	for _, desc := range wrapSettingDescription(it.desc, width, 6) {
+		block = append(block, th.FG256(th.Muted, desc))
+	}
+	return block
+}
+
+// rowBudget returns the rows left for the window after the fixed rows
+// around it (frame header, hint, closing rule) are counted against
+// MaxRows. Zero means unbounded.
+func (d *settingsDialog) rowBudget(fixed int) int {
+	if d.MaxRows <= 0 {
+		return 0
+	}
+	if budget := d.MaxRows - fixed; budget > 0 {
+		return budget
+	}
+	return 1
+}
+
+// windowBlocks returns the [start, end) range of entry blocks to draw
+// so the cursor entry stays visible. Heights are the rendered row
+// counts per entry, budget is the rows available for the blocks plus
+// the "more above/below" markers, and zero means windowing is off.
+func (d *settingsDialog) windowBlocks(heights []int, cursor, budget int) (start, end int) {
+	total := len(heights)
+	if total == 0 {
+		return 0, 0
+	}
+	if budget <= 0 {
+		d.viewTop = 0
+		return 0, total
+	}
+	if cursor < 0 {
+		cursor = 0
+	}
+	if cursor >= total {
+		cursor = total - 1
+	}
+	rows := 0
+	for _, h := range heights {
+		rows += h
+	}
+	if rows <= budget {
+		d.viewTop = 0
+		return 0, total
+	}
+	// Entries are hidden above and/or below, so hold back a row for
+	// the markers. On a terminal too short for the cursor entry plus
+	// markers, drop the reservation: the highlighted row matters more
+	// than the hint that more entries exist.
+	inner := budget - 2
+	if inner < heights[cursor] {
+		inner = budget
+	}
+	return d.anchorBlocks(heights, cursor, inner)
+}
+
+// anchorBlocks returns the block range of combined height <= budget
+// that keeps the cursor entry visible. The window extends downward
+// from the persistent viewTop; when the cursor moves past either edge
+// the window re-anchors so the cursor entry becomes the first or last
+// visible one. viewTop is updated for the next render so the window
+// stays put while the cursor moves inside it.
+func (d *settingsDialog) anchorBlocks(heights []int, cursor, budget int) (start, end int) {
+	total := len(heights)
+	start = d.viewTop
+	if start > cursor || start >= total {
+		start = cursor
+	}
+	used := 0
+	for end = start; end < total && (end == start || used+heights[end] <= budget); end++ {
+		used += heights[end]
+	}
+	if cursor >= end {
+		// The cursor fell past the bottom edge: re-anchor on it and
+		// fill the remaining budget with entries above.
+		start, end = cursor, cursor+1
+		used = heights[cursor]
+		for start > 0 && used+heights[start-1] <= budget {
+			start--
+			used += heights[start]
 		}
 	}
-	lines = append(lines, frameRule(th, width))
+	d.viewTop = start
+	return start, end
+}
+
+// windowLines renders the [start, end) slice of entry blocks, framed by
+// muted "more above/below" markers when entries are hidden on either
+// side. Blocks are trimmed so the result never uses more than budget
+// rows; budget <= 0 means unbounded.
+func windowLines(th tui.Theme, blocks [][]string, start, end, budget int) []string {
+	unbounded := budget <= 0
+	remaining := budget
+	var lines []string
+	// Spend a row on the above marker only when the first block still
+	// gets a row afterwards: on a terminal this short the highlight
+	// matters more than the hint that entries are hidden.
+	if start > 0 && (unbounded || remaining > 1) {
+		lines = append(lines, th.FG256(th.Muted, fmt.Sprintf("  ↑ %d more above", start)))
+		remaining--
+	}
+	for i := start; i < end; i++ {
+		block := blocks[i]
+		if !unbounded {
+			if remaining <= 0 {
+				break
+			}
+			if len(block) > remaining {
+				block = block[:remaining]
+			}
+		}
+		lines = append(lines, block...)
+		remaining -= len(block)
+	}
+	if end < len(blocks) && (unbounded || remaining > 0) {
+		lines = append(lines, th.FG256(th.Muted, fmt.Sprintf("  ↓ %d more below", len(blocks)-end)))
+	}
 	return lines
 }
 
@@ -289,27 +446,37 @@ func (d *settingsDialog) renderOptions(th tui.Theme, width int) []string {
 		title = d.title
 	}
 	lines := []string{frameHeader(th, title, width)}
-	if it.desc != "" {
+	// Keep room for the hint, closing rule, and at least the selected
+	// option's label before spending a row on the optional description.
+	if it.desc != "" && (d.MaxRows <= 0 || d.MaxRows >= 5) {
 		lines = append(lines, th.FG256(th.Muted, it.desc))
 	}
 	lines = append(lines, th.FG256(th.Muted, "select with enter/space, esc to go back:"))
+	blocks := make([][]string, len(it.options))
+	heights := make([]int, len(it.options))
 	for idx, opt := range it.options {
 		marker := "  "
 		if idx == it.choice {
 			marker = "✓ "
 		}
 		plain := "  " + marker + opt.label
+		block := make([]string, 0, 4)
 		if idx == d.optionCursor {
-			lines = append(lines, th.PadHighlight(plain, width))
+			block = append(block, th.PadHighlight(plain, width))
 		} else {
-			lines = append(lines, plain)
+			block = append(block, plain)
 		}
-		if opt.desc != "" {
-			for _, desc := range wrapSettingDescription(opt.desc, width, 6) {
-				lines = append(lines, th.FG256(th.Muted, desc))
-			}
+		for _, desc := range wrapSettingDescription(opt.desc, width, 6) {
+			block = append(block, th.FG256(th.Muted, desc))
 		}
+		blocks[idx] = block
+		heights[idx] = len(block)
 	}
+	// Same windowing as the item list: a theme list longer than the
+	// terminal scrolls with the cursor instead of losing its head.
+	budget := d.rowBudget(len(lines) + 1) // one row for the closing rule
+	start, end := d.windowBlocks(heights, d.optionCursor, budget)
+	lines = append(lines, windowLines(th, blocks, start, end, budget)...)
 	lines = append(lines, frameRule(th, width))
 	return lines
 }
