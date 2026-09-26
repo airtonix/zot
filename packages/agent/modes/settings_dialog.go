@@ -446,7 +446,9 @@ func (d *settingsDialog) renderOptions(th tui.Theme, width int) []string {
 		title = d.title
 	}
 	lines := []string{frameHeader(th, title, width)}
-	if it.desc != "" {
+	// Keep room for the hint, closing rule, and at least the selected
+	// option's label before spending a row on the optional description.
+	if it.desc != "" && (d.MaxRows <= 0 || d.MaxRows >= 5) {
 		lines = append(lines, th.FG256(th.Muted, it.desc))
 	}
 	lines = append(lines, th.FG256(th.Muted, "select with enter/space, esc to go back:"))

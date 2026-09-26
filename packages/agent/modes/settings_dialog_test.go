@@ -127,6 +127,37 @@ func TestSettingsDialogKeepsCursorRowOnTinyTerminal(t *testing.T) {
 	}
 }
 
+func TestSettingsOptionPickerFitsShortTerminal(t *testing.T) {
+	for _, rows := range []int{12, 14, 16, 17, 24} {
+		t.Run(fmt.Sprintf("rows=%d", rows), func(t *testing.T) {
+			term := &shortTestTerminal{cols: 80, rows: rows}
+			i := NewInteractive(InteractiveConfig{Terminal: term})
+			i.settingsDialog.OpenDirectOption(settingsItem{
+				label: "reasoning level", desc: "reasoning depth for reasoning-capable models",
+				options: []settingsOption{{label: "off"}, {label: "low"}},
+			})
+			i.redraw()
+
+			lines := i.settingsDialog.Render(i.cfg.Theme, 80)
+			if len(lines) > i.settingsDialog.MaxRows {
+				t.Fatalf("option picker rendered %d rows, cap %d", len(lines), i.settingsDialog.MaxRows)
+			}
+			text := renderedPlain(lines)
+			if !strings.Contains(text, "off") {
+				t.Fatalf("selected option missing from window:\n%s", text)
+			}
+			if i.settingsDialog.MaxRows >= 5 && !strings.Contains(text, "reasoning depth") {
+				t.Fatalf("description missing when it fits:\n%s", text)
+			}
+			written := strings.Count(term.String(), "\r\n") + 1
+			band := written - len(i.cachedChatLocked(80))
+			if band > rows-1 {
+				t.Fatalf("bottom band is %d rows for a %d-row terminal", band, rows)
+			}
+		})
+	}
+}
+
 func TestSettingsDialogRendersEverythingWithoutMaxRows(t *testing.T) {
 	d := newSettingsDialog()
 	d.Open(settingsTestItems(20))
