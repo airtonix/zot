@@ -73,7 +73,7 @@ func TestLoginDialogLlamaCPPValidatesURLAndAcceptsOptionalKey(t *testing.T) {
 	}
 }
 
-func TestLoginDialogOpenAIOAuthDoesNotOfferCopyCode(t *testing.T) {
+func TestLoginDialogOpenAIOAuthAcceptsCodeFromSameTransaction(t *testing.T) {
 	d := newLoginDialog()
 	d.Open(t.TempDir())
 	d.method = "oauth"
@@ -81,11 +81,12 @@ func TestLoginDialogOpenAIOAuthDoesNotOfferCopyCode(t *testing.T) {
 	d.ShowWaiting("http://localhost:1455/auth/callback")
 
 	text := stripANSIBytes(strings.Join(d.Render(tui.Theme{}, 80), "\n"))
-	if strings.Contains(text, "paste the authorization code") {
-		t.Fatal("OpenAI OAuth dialog offers manual code entry")
+	if !strings.Contains(text, "paste the authorization code") {
+		t.Fatal("OpenAI OAuth dialog does not offer pasted code entry")
 	}
-	if !strings.Contains(text, "complete sign-in in the browser") {
-		t.Fatal("OpenAI OAuth dialog does not require browser sign-in")
+	d.codeEd.SetValue("code#state")
+	if action := d.HandleKey(tui.Key{Kind: tui.KeyEnter}); action.SubmitCode != "code#state" {
+		t.Fatalf("code submission = %+v", action)
 	}
 }
 
@@ -126,8 +127,8 @@ func TestLoginDialogAnthropicOffersSeparateOAuthFlows(t *testing.T) {
 				d.ShowWaiting("https://example.com/oauth/authorize")
 			}
 			text := stripANSIBytes(strings.Join(d.Render(tui.Theme{}, 80), "\n"))
-			if strings.Contains(text, "paste the authorization code") != tc.manual {
-				t.Fatalf("wrong input for %s flow: %s", tc.name, text)
+			if !strings.Contains(text, "paste the authorization code") {
+				t.Fatalf("missing code input for %s flow: %s", tc.name, text)
 			}
 		})
 	}
@@ -147,6 +148,7 @@ func TestAnthropicManualLoginUsesCopyCodeTransaction(t *testing.T) {
 		t.Fatalf("expected manual Anthropic transaction, got %+v", act)
 	}
 	i.startManualOAuthFlow(act.Provider)
+	i.handleAuthEvent(<-manager.Events())
 	if i.dialog.step != loginStepPasteCode {
 		t.Fatalf("step = %v, want paste code", i.dialog.step)
 	}

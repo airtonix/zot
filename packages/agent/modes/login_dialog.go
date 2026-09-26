@@ -230,7 +230,7 @@ func (d *loginDialog) Render(th tui.Theme, width int) []string {
 			lines = append(lines, th.FG256(th.Accent, seg))
 		}
 		lines = append(lines, "")
-		if d.method == "oauth" {
+		if d.method == "oauth" && d.provider != "anthropic" && d.provider != "openai-codex" {
 			lines = append(lines, th.FG256(th.Muted, "complete sign-in in the browser - esc cancels"))
 			lines = append(lines, frameRule(th, width))
 			break
@@ -674,7 +674,7 @@ func (d *loginDialog) handleWaitingKey(k tui.Key) loginDialogAction {
 		d.Close()
 		return loginDialogAction{Close: true}
 	}
-	if d.method == "oauth" || d.codeEd == nil {
+	if d.codeEd == nil {
 		return loginDialogAction{}
 	}
 	if submit := d.codeEd.HandleKey(k); submit {
@@ -717,7 +717,7 @@ func (d *loginDialog) CursorPos(width int) (row, col int) {
 		}
 		return baseOffset + eRow, eCol
 	}
-	if d.codeEd == nil || (d.step == loginStepWaiting && d.method == "oauth") {
+	if d.codeEd == nil {
 		return -1, -1
 	}
 	if d.step != loginStepPasteCode && d.step != loginStepWaiting {

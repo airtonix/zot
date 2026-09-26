@@ -2298,6 +2298,9 @@ func (i *Interactive) handleKey(ctx context.Context, k tui.Key) (done bool) {
 			return false
 		}
 		act := i.dialog.HandleKey(k)
+		if act.Close && i.cfg.AuthManager != nil {
+			i.cfg.AuthManager.CancelOAuth()
+		}
 		if act.StartAPIKey {
 			i.startAPIKeyFlow(act.Provider)
 		}
@@ -5853,6 +5856,9 @@ func (i *Interactive) swapModel(prov, model string, builder func(string, string)
 func (i *Interactive) handleAuthEvent(ev auth.Event) {
 	switch ev.Kind {
 	case "started":
+		if i.dialog.step == loginStepPasteCode && i.dialog.url == ev.URL {
+			return
+		}
 		i.dialog.ShowWaiting(ev.URL)
 	case "browser_open":
 		// no-op
