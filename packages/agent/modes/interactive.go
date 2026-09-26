@@ -1411,6 +1411,20 @@ func (i *Interactive) redraw() {
 	case i.telegramDialog.Active():
 		dialog = i.telegramDialog.Render(i.cfg.Theme, cols)
 	case i.settingsDialog.Active():
+		// Reserve rows for the editor, the status line, the blank
+		// separators, and one chat row so the settings list scrolls
+		// inside the dialog when the terminal is short instead of
+		// having its top entries clipped off and unreachable.
+		// Mirrors the reservation made for the session picker above.
+		_, rows := i.cfg.Terminal.Size()
+		avail := rows - 12
+		// Floor at the frame chrome (header + hint + rule) plus one
+		// list row so even a hand-sized terminal draws the row the
+		// cursor is on rather than nothing.
+		if avail < 4 {
+			avail = 4
+		}
+		i.settingsDialog.MaxRows = avail
 		dialog = i.settingsDialog.Render(i.cfg.Theme, cols)
 	case i.sessionOpsDialog.Active():
 		dialog = i.sessionOpsDialog.Render(i.cfg.Theme, cols)
