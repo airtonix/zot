@@ -145,16 +145,22 @@ func resolveBedrockAuth(apiKey string) (bearer string, sigv4 *bedrockSigV4Creds)
 		return token, nil
 	}
 
+	return "", resolveBedrockDiscoveryCreds()
+}
+
+// resolveBedrockDiscoveryCreds ignores inference bearer tokens: Bedrock's
+// control-plane listing endpoints require SigV4 even when inference uses a bearer.
+func resolveBedrockDiscoveryCreds() *bedrockSigV4Creds {
 	ak := os.Getenv("AWS_ACCESS_KEY_ID")
 	sk := os.Getenv("AWS_SECRET_ACCESS_KEY")
 	st := os.Getenv("AWS_SESSION_TOKEN")
 	if ak != "" && sk != "" {
-		return "", &bedrockSigV4Creds{accessKeyID: ak, secretAccessKey: sk, sessionToken: st}
+		return &bedrockSigV4Creds{accessKeyID: ak, secretAccessKey: sk, sessionToken: st}
 	}
 
 	if profile := os.Getenv("AWS_PROFILE"); profile != "" {
 		if creds, err := readAWSCredentialsFile(profile); err == nil {
-			return "", creds
+			return creds
 		}
 	}
 
@@ -164,10 +170,10 @@ func resolveBedrockAuth(apiKey string) (bearer string, sigv4 *bedrockSigV4Creds)
 	// in ~/.aws/credentials. Best-effort: absent CLI or an expired login
 	// simply yields no credentials.
 	if creds := resolveBedrockCredsViaCLI(); creds != nil {
-		return "", creds
+		return creds
 	}
 
-	return "", nil
+	return nil
 }
 
 // resolveBedrockCredsViaCLI shells out to `aws configure

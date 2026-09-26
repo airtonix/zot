@@ -35,6 +35,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -51,19 +52,17 @@ func bytesReader(payload []byte) io.Reader {
 // DiscoverBedrock lists the foundation models and inference profiles
 // available to the caller's AWS credentials in the given region.
 //
-// apiKey is the credential zot resolved for the amazon-bedrock provider;
-// it is used only to detect a bearer token (which cannot reach the
-// control-plane APIs). SigV4 credentials are resolved from the standard
-// AWS environment / profile / CLI sources, matching the runtime client.
+// SigV4 credentials are resolved from the standard AWS environment /
+// profile / CLI sources, even when a bearer token is used for inference.
 //
 // region defaults to AWS_REGION / AWS_DEFAULT_REGION / us-east-1 when
 // empty. A nil error with a nil slice means "no SigV4 credentials" or
 // "no models"; callers should treat that as a skip.
-func DiscoverBedrock(ctx context.Context, apiKey, region string) ([]Model, error) {
+func DiscoverBedrock(ctx context.Context, region string) ([]Model, error) {
 	if region == "" {
 		region = bedrockResolveRegion()
 	}
-	_, sigv4 := resolveBedrockAuth(apiKey)
+	sigv4 := resolveBedrockDiscoveryCreds()
 	if sigv4 == nil {
 		// Bearer-only or unauthenticated: control-plane APIs are
 		// unreachable. Skip quietly so the catalog stands.
@@ -134,10 +133,11 @@ func bedrockListModelIDs(ctx context.Context, client *http.Client, creds *bedroc
 	// ListInferenceProfiles: GET, paginated via ?nextToken=.
 	next := ""
 	for {
-		ipURL := controlPlaneBase + "/inference-profiles?maxResults=1000"
+		query := url.Values{"maxResults": {"1000"}}
 		if next != "" {
-			ipURL += "&nextToken=" + next
+			query.Set("nextToken", next)
 		}
+		ipURL := controlPlaneBase + "/inference-profiles?" + query.Encode()
 		ipBody, err := bedrockSignedControlPlane(ctx, client, creds, region, http.MethodGet, ipURL, nil)
 		if err != nil {
 			// Non-fatal: foundation models already gathered.

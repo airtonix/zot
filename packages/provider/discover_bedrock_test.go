@@ -2,11 +2,43 @@ package provider
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+type bedrockDiscoveryTestTransport func(*http.Request) (*http.Response, error)
+
+func (f bedrockDiscoveryTestTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+func TestDiscoverBedrockUsesSigV4WithBearer(t *testing.T) {
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "bearer")
+	t.Setenv("AWS_ACCESS_KEY_ID", "AKID")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "SECRET")
+	original := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = original })
+	http.DefaultTransport = bedrockDiscoveryTestTransport(func(r *http.Request) (*http.Response, error) {
+		if !strings.Contains(r.Header.Get("Authorization"), "Credential=AKID/") {
+			t.Errorf("discovery request was not signed with SigV4")
+		}
+		body := `{"modelSummaries":[{"modelId":"test.new-model","outputModalities":["TEXT"]}]}`
+		if r.URL.Path == "/inference-profiles" {
+			body = `{"inferenceProfileSummaries":[]}`
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+	})
+	models, err := DiscoverBedrock(context.Background(), "us-east-1")
+	if err != nil || len(models) != 1 || models[0].ID != "test.new-model" {
+		t.Fatalf("discovered models = %v, err = %v", models, err)
+	}
+	if bearer, sigv4 := resolveBedrockAuth("bearer"); bearer != "bearer" || sigv4 != nil {
+		t.Fatal("inference must continue to prefer the bearer token")
+	}
+}
 
 func TestBedrockEmitsText(t *testing.T) {
 	if !bedrockEmitsText(nil) {
@@ -55,7 +87,7 @@ func TestResolveBedrockAuthBearerVsSigV4(t *testing.T) {
 // nextToken. Embedding/image-only models are filtered out; profile IDs
 // are included; duplicates are de-duplicated.
 func TestBedrockListModelIDs(t *testing.T) {
-	page1 := `{"inferenceProfileSummaries":[{"inferenceProfileId":"us.anthropic.claude-opus-5-5"}],"nextToken":"NEXT"}`
+	page1 := `{"inferenceProfileSummaries":[{"inferenceProfileId":"us.anthropic.claude-opus-5-5"}],"nextToken":"N+E/T= &"}`
 	page2 := `{"inferenceProfileSummaries":[{"inferenceProfileId":"eu.anthropic.claude-sonnet-5"}]}`
 	foundation := `{"modelSummaries":[
 		{"modelId":"anthropic.claude-opus-5-5","outputModalities":["TEXT"]},
@@ -72,10 +104,14 @@ func TestBedrockListModelIDs(t *testing.T) {
 			w.Write([]byte(foundation))
 		case strings.Contains(r.URL.Path, "/inference-profiles"):
 			ipHits++
-			if r.URL.Query().Get("nextToken") == "NEXT" {
-				w.Write([]byte(page2))
-			} else {
+			switch token := r.URL.Query().Get("nextToken"); token {
+			case "":
 				w.Write([]byte(page1))
+			case "N+E/T= &":
+				w.Write([]byte(page2))
+			default:
+				t.Errorf("unexpected pagination token %q", token)
+				w.WriteHeader(http.StatusBadRequest)
 			}
 		default:
 			w.WriteHeader(http.StatusNotFound)
