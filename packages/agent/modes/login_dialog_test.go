@@ -1,9 +1,13 @@
 package modes
 
 import (
+	"context"
+	"net/url"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/patriceckhart/zot/packages/provider/auth"
 	"github.com/patriceckhart/zot/packages/tui"
 )
 
@@ -85,12 +89,85 @@ func TestLoginDialogOpenAIOAuthDoesNotOfferCopyCode(t *testing.T) {
 	}
 }
 
+func TestLoginDialogAnthropicOffersSeparateOAuthFlows(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		choice int
+		manual bool
+		step   loginStep
+	}{
+		{name: "browser", choice: 0, step: loginStepWaiting},
+		{name: "copy code", choice: 1, manual: true, step: loginStepPasteCode},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := newLoginDialog()
+			d.Open(t.TempDir())
+			d.method = "oauth"
+			d.step = loginStepProvider
+			for idx, p := range d.providerOptions() {
+				if p == "anthropic" {
+					d.cursor = idx
+					break
+				}
+			}
+			if action := d.HandleKey(tui.Key{Kind: tui.KeyEnter}); action.StartOAuth || action.StartManual || d.step != loginStepOAuthMethod {
+				t.Fatalf("provider selection started OAuth before choosing a flow: action=%+v step=%v", action, d.step)
+			}
+			for i := 0; i < tc.choice; i++ {
+				d.HandleKey(tui.Key{Kind: tui.KeyDown})
+			}
+			action := d.HandleKey(tui.Key{Kind: tui.KeyEnter})
+			if action.StartManual != tc.manual || action.StartOAuth == tc.manual || d.step != tc.step {
+				t.Fatalf("flow action=%+v step=%v", action, d.step)
+			}
+			if tc.manual {
+				d.ShowPasteCode("https://example.com/oauth/authorize")
+			} else {
+				d.ShowWaiting("https://example.com/oauth/authorize")
+			}
+			text := stripANSIBytes(strings.Join(d.Render(tui.Theme{}, 80), "\n"))
+			if strings.Contains(text, "paste the authorization code") != tc.manual {
+				t.Fatalf("wrong input for %s flow: %s", tc.name, text)
+			}
+		})
+	}
+}
+
+func TestAnthropicManualLoginUsesCopyCodeTransaction(t *testing.T) {
+	manager := auth.NewManager(auth.NewStore(filepath.Join(t.TempDir(), "auth.json")))
+	t.Cleanup(manager.Close)
+	i := NewInteractive(InteractiveConfig{AuthManager: manager})
+	i.dialog.Open(t.TempDir())
+	i.dialog.method = "oauth"
+	i.dialog.provider = "anthropic"
+	i.dialog.step = loginStepOAuthMethod
+	i.dialog.HandleKey(tui.Key{Kind: tui.KeyDown})
+	act := i.dialog.HandleKey(tui.Key{Kind: tui.KeyEnter})
+	if !act.StartManual || act.Provider != "anthropic" {
+		t.Fatalf("expected manual Anthropic transaction, got %+v", act)
+	}
+	i.startManualOAuthFlow(act.Provider)
+	if i.dialog.step != loginStepPasteCode {
+		t.Fatalf("step = %v, want paste code", i.dialog.step)
+	}
+	u, err := url.Parse(i.dialog.url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := u.Query().Get("redirect_uri"); got != auth.AnthropicManualOAuth.RedirectURI() {
+		t.Fatalf("redirect URI = %q, want copy-code redirect", got)
+	}
+	if err := manager.CompleteManualOAuth(context.Background(), ""); err == nil || err.Error() != "empty code" {
+		t.Fatalf("manual transaction not ready for code entry: %v", err)
+	}
+}
+
 func TestLoginDialogCursorPosMatchesPaddedInputRow(t *testing.T) {
 	d := newLoginDialog()
 	d.Open(t.TempDir())
 	d.method = "oauth"
 	d.provider = "anthropic"
-	d.ShowWaiting("https://example.com/oauth/authorize?code_challenge=abc&state=xyz")
+	d.ShowPasteCode("https://example.com/oauth/authorize?code_challenge=abc&state=xyz")
 
 	lines := padDialogFrame(d.Render(tui.Theme{}, 80))
 	row, _ := d.CursorPos(80)

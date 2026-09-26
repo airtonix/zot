@@ -5341,17 +5341,6 @@ func (i *Interactive) startOAuthFlow(provider string) {
 	if provider == "kimi" && i.cfg.SetKimiCLIFallbackDisabled != nil {
 		_ = i.cfg.SetKimiCLIFallbackDisabled(false)
 	}
-	// Device-code providers already support headless login and must only
-	// start one polling flow.
-	if provider == "kimi" || provider == "xai" || provider == "github-copilot" {
-		loginURL, err := i.cfg.AuthManager.StartOAuth(provider)
-		if err != nil {
-			i.dialog.ShowResult(false, err.Error())
-			return
-		}
-		i.dialog.ShowWaiting(loginURL)
-		return
-	}
 	loginURL, err := i.cfg.AuthManager.StartOAuth(provider)
 	if err != nil {
 		i.dialog.ShowResult(false, err.Error())
@@ -5370,7 +5359,7 @@ func (i *Interactive) startManualOAuthFlow(provider string) {
 		i.dialog.ShowResult(false, err.Error())
 		return
 	}
-	i.dialog.url = url
+	i.dialog.ShowPasteCode(url)
 	i.invalidate()
 }
 
