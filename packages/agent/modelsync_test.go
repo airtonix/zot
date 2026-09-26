@@ -4,15 +4,67 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/patriceckhart/zot/packages/provider"
 )
+
+func TestRefreshModelsBedrockWithDefaultCLIProfile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test uses a shell script to simulate the AWS CLI")
+	}
+	t.Setenv("ZOT_HOME", t.TempDir())
+	t.Setenv("AWS_PROFILE", "")
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "")
+	for _, name := range []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "KIMI_API_KEY", "GOOGLE_API_KEY", "OPENROUTER_API_KEY", "GONDOLA_API_KEY", "YOLO_AUTO_API_KEY"} {
+		t.Setenv(name, "")
+	}
+	bin := t.TempDir()
+	script := "#!/bin/sh\nprintf '%s\\n' '{\"AccessKeyId\":\"AKID\",\"SecretAccessKey\":\"SECRET\"}'\n"
+	if err := os.WriteFile(filepath.Join(bin, "aws"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	orig := http.DefaultTransport
+	t.Cleanup(func() {
+		http.DefaultTransport = orig
+		provider.SetLiveModels(nil)
+	})
+	http.DefaultTransport = yoloAutoTestTransport(func(r *http.Request) (*http.Response, error) {
+		var body string
+		switch r.URL.Path {
+		case "/foundation-models":
+			body = `{"modelSummaries":[{"modelId":"example.cli-only-model","outputModalities":["TEXT"]}]}`
+		case "/inference-profiles":
+			body = `{"inferenceProfileSummaries":[]}`
+		default:
+			return nil, fmt.Errorf("unexpected discovery request: %s", r.URL)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+	})
+
+	refreshModels()
+	if _, err := provider.FindModel("amazon-bedrock", "example.cli-only-model"); err != nil {
+		t.Fatal("default AWS CLI profile was not discovered:", err)
+	}
+	resolved, err := Resolve(Args{Provider: "amazon-bedrock", Model: "example.cli-only-model"}, true)
+	if err != nil {
+		t.Fatal("default AWS CLI profile could not resolve for inference:", err)
+	}
+	if resolved.Credential != "<aws>" {
+		t.Fatalf("inference credential = %q, want AWS sentinel", resolved.Credential)
+	}
+}
 
 func TestRefreshLlamaCPPModelsAddsOnlyLoadedModels(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -255,6 +255,12 @@ func refreshModels() {
 				all = append(all, live...)
 			}
 		}
+		// Bedrock resolves SigV4 credentials independently of inference auth.
+		// A default AWS CLI profile can be usable even when zot has no
+		// Bedrock credential registered with its general resolver.
+		if live, err := provider.DiscoverBedrock(ctx, ""); err == nil {
+			all = append(all, live...)
+		}
 		if haveOpenRouter {
 			// /models is public; gate on a credential so the picker only
 			// fills with OpenRouter's hundreds of routes for users who use it.
