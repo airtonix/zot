@@ -50,6 +50,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"sort"
 	"strings"
 	"time"
@@ -82,17 +83,13 @@ type bedrockSigV4Creds struct {
 //  3. AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY (+ optional
 //     AWS_SESSION_TOKEN) -> SigV4 route.
 //  4. AWS_PROFILE -> read ~/.aws/credentials, take that profile's keys.
+//  5. AWS_PROFILE -> `aws configure export-credentials` (SSO, assume-role,
+//     credential_process) when the profile has no static keys.
 //
 // region defaults to us-east-1 unless AWS_REGION / AWS_DEFAULT_REGION is
 // set or the baseURL embeds a region.
 func NewBedrockClient(apiKey, baseURL string) Client {
-	region := os.Getenv("AWS_REGION")
-	if region == "" {
-		region = os.Getenv("AWS_DEFAULT_REGION")
-	}
-	if region == "" {
-		region = "us-east-1"
-	}
+	region := bedrockResolveRegion()
 	if baseURL == "" {
 		baseURL = "https://bedrock-runtime." + region + ".amazonaws.com"
 	}
@@ -102,36 +99,117 @@ func NewBedrockClient(apiKey, baseURL string) Client {
 		http:    &http.Client{Timeout: 0},
 	}
 
-	// Bearer route.
-	token := apiKey
-	if token == "" || token == "<aws>" {
-		token = os.Getenv("AWS_BEARER_TOKEN_BEDROCK")
-	}
-	if token != "" && token != "<aws>" {
-		c.bearerToken = token
+	bearer, sigv4 := resolveBedrockAuth(apiKey)
+	if bearer != "" {
+		c.bearerToken = bearer
 		return c
 	}
-
-	// SigV4 route: env vars first.
-	ak := os.Getenv("AWS_ACCESS_KEY_ID")
-	sk := os.Getenv("AWS_SECRET_ACCESS_KEY")
-	st := os.Getenv("AWS_SESSION_TOKEN")
-	if ak != "" && sk != "" {
-		c.sigv4 = &bedrockSigV4Creds{accessKeyID: ak, secretAccessKey: sk, sessionToken: st}
+	if sigv4 != nil {
+		c.sigv4 = sigv4
 		return c
-	}
-
-	// SigV4 route: ~/.aws/credentials via AWS_PROFILE.
-	if profile := os.Getenv("AWS_PROFILE"); profile != "" {
-		if creds, err := readAWSCredentialsFile(profile); err == nil {
-			c.sigv4 = creds
-			return c
-		}
 	}
 
 	return &unimplementedClient{
 		name: "amazon-bedrock",
 		hint: "no Bedrock credentials found (set AWS_BEARER_TOKEN_BEDROCK, AWS_ACCESS_KEY_ID+AWS_SECRET_ACCESS_KEY, or AWS_PROFILE)",
+	}
+}
+
+// bedrockResolveRegion returns the AWS region for Bedrock calls,
+// honoring AWS_REGION then AWS_DEFAULT_REGION, defaulting to us-east-1.
+func bedrockResolveRegion() string {
+	region := os.Getenv("AWS_REGION")
+	if region == "" {
+		region = os.Getenv("AWS_DEFAULT_REGION")
+	}
+	if region == "" {
+		region = "us-east-1"
+	}
+	return region
+}
+
+// resolveBedrockAuth determines Bedrock credentials from the same
+// sources NewBedrockClient uses, so discovery and inference share one
+// resolution path. Exactly one of (bearer, sigv4) is non-empty on
+// success; both are zero when no credentials are found.
+//
+// Resolution order (first match wins): explicit apiKey bearer, then
+// AWS_BEARER_TOKEN_BEDROCK, then AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY
+// env vars, then ~/.aws/credentials via AWS_PROFILE.
+func resolveBedrockAuth(apiKey string) (bearer string, sigv4 *bedrockSigV4Creds) {
+	token := apiKey
+	if token == "" || token == "<aws>" {
+		token = os.Getenv("AWS_BEARER_TOKEN_BEDROCK")
+	}
+	if token != "" && token != "<aws>" {
+		return token, nil
+	}
+
+	return "", resolveBedrockDiscoveryCreds()
+}
+
+// resolveBedrockDiscoveryCreds ignores inference bearer tokens: Bedrock's
+// control-plane listing endpoints require SigV4 even when inference uses a bearer.
+func resolveBedrockDiscoveryCreds() *bedrockSigV4Creds {
+	ak := os.Getenv("AWS_ACCESS_KEY_ID")
+	sk := os.Getenv("AWS_SECRET_ACCESS_KEY")
+	st := os.Getenv("AWS_SESSION_TOKEN")
+	if ak != "" && sk != "" {
+		return &bedrockSigV4Creds{accessKeyID: ak, secretAccessKey: sk, sessionToken: st}
+	}
+
+	if profile := os.Getenv("AWS_PROFILE"); profile != "" {
+		if creds, err := readAWSCredentialsFile(profile); err == nil {
+			return creds
+		}
+	}
+
+	// Last resort: ask the AWS CLI to resolve credentials for the active
+	// profile. This handles SSO, assumed roles, credential_process, and
+	// web-identity setups whose credentials are not stored as static keys
+	// in ~/.aws/credentials. Best-effort: absent CLI or an expired login
+	// simply yields no credentials.
+	if creds := resolveBedrockCredsViaCLI(); creds != nil {
+		return creds
+	}
+
+	return nil
+}
+
+// resolveBedrockCredsViaCLI shells out to `aws configure
+// export-credentials --format process`, which returns fully-resolved
+// credentials for the active profile regardless of how that profile is
+// configured (static keys, SSO, assume-role, credential_process). The
+// AWS CLI must be installed and the profile's login (if any) still
+// valid. Returns nil on any failure so the caller can fall through.
+func resolveBedrockCredsViaCLI() *bedrockSigV4Creds {
+	if _, err := exec.LookPath("aws"); err != nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	// AWS_PROFILE / AWS_REGION already in the environment are inherited,
+	// so the CLI resolves the same profile zot was pointed at.
+	cmd := exec.CommandContext(ctx, "aws", "configure", "export-credentials", "--format", "process")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	var exported struct {
+		AccessKeyID     string `json:"AccessKeyId"`
+		SecretAccessKey string `json:"SecretAccessKey"`
+		SessionToken    string `json:"SessionToken"`
+	}
+	if err := json.Unmarshal(out, &exported); err != nil {
+		return nil
+	}
+	if exported.AccessKeyID == "" || exported.SecretAccessKey == "" {
+		return nil
+	}
+	return &bedrockSigV4Creds{
+		accessKeyID:     exported.AccessKeyID,
+		secretAccessKey: exported.SecretAccessKey,
+		sessionToken:    exported.SessionToken,
 	}
 }
 

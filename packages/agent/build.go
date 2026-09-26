@@ -596,6 +596,12 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	// models like ollama don't need real API keys).
 	if resolvedModel.BaseURL != "" && credErr != nil {
 		cred = "ollama"
+		if provName == "amazon-bedrock" {
+			// The default AWS CLI profile is resolved by the Bedrock client,
+			// not the general credential resolver. Never pass the local-model
+			// placeholder as a bearer token.
+			cred = "<aws>"
+		}
 		credErr = nil
 		requireCred = false
 	}
